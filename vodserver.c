@@ -11,6 +11,7 @@
 #include <sys/types.h> 
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/select.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <signal.h>
@@ -118,8 +119,50 @@ ftype file_types [] = {
     {NULL, NULL},
 };
 
+/*Our own custom UDP packet*/
+typedef struct {
+    char flags;                   //byte  0
+    char pack;                    //byte  1
+    uint16_t source_port;   //bytes 2  - 3
+    uint16_t dest_port;     //bytes 4  - 5
+    uint16_t length;        //bytes 6  - 7
+    uint16_t syn;           //bytes 8  - 9
+    uint16_t ack;           //bytes 10 - 11
+    char* data;                   //bytes 12 - (12+length)
+} packet;
 
-void *serve(void *arg);
+char* package(packet* p)
+{
+    char* buf = malloc(sizeof(char)*p->length + 12);
+    memcpy(buf, &(p->flags), 1);
+    memcpy(buf+1, &(p->pack), 1);
+    memcpy(buf+2, &(p->source_port), 2);
+    memcpy(buf+4, &(p->dest_port), 2);
+    memcpy(buf+6, &(p->length), 2);
+    memcpy(buf+8, &(p->syn), 2);
+    memcpy(buf+10, &(p->ack), 2);
+    memcpy(buf+12, p->data, p->length);
+    return buf;
+}
+
+packet* unwrap(char* buf)
+{
+    packet* p = (packet *)malloc(sizeof(packet));
+    p->flags = buf[0];
+    p->pack = 11;
+    memcpy(&(p->source_port), buf+2, 2);
+    memcpy(&(p->dest_port), buf+4, 2);
+    memcpy(&(p->length), buf+6, 2);
+    memcpy(&(p->syn), buf+8, 2);
+    memcpy(&(p->ack), buf+10, 2);
+    printf("\n1: %u 2: %u 3: %u\n", p->source_port, p->syn, p->ack);
+    p->data = malloc(sizeof(char) * p->length);
+    strncpy(p->data, buf+12, p->length);
+    return p;
+}
+
+
+void *serve(int connfd, fd_set* live_set);
 
 
 /*
@@ -319,23 +362,36 @@ url_info parse(char *buf){
 
 
 int main(int argc, char **argv) {
- int listenfd; /* listening socket */
+    int listenfd; /* listening socket for http */
     int portno; /* port to listen on */
+    int back_fd;
+    int back_port;
+    int on_fd, left;
+    int result; 
+    int new_fd = 0;
     struct sockaddr_in serveraddr; /* server's addr */
+    struct sockaddr_in backaddr;
     int optval; /* flag value for setsockopt */
+    fd_set curr_set, live_set; /* Set of active fd's */
+
     signal(SIGPIPE,SIG_IGN); //Sigpipe handling
     printf(get_rfc_time());
+
     /* check command line args */
-    if (argc != 2) {
-        fprintf(stderr, "usage: %s <port>\n", argv[0]);
+    if (argc != 3) {
+        fprintf(stderr, "usage: %s <port> <backend_port>\n", argv[0]);
         exit(1);
     }
     portno = atoi(argv[1]);
+    back_port = atoi(argv[2]);
     
     /* socket: create a socket */
     listenfd = socket(AF_INET, SOCK_STREAM, 0);
+    back_fd = socket(AF_INET, SOCK_DGRAM, 0);
     if (listenfd < 0)
         error("ERROR opening socket");
+    if (back_fd < 0)
+        error("ERROR opening backend socket");
     
     /* setsockopt: Handy debugging trick that lets
      * us rerun the server immediately after we kill it;
@@ -351,46 +407,93 @@ int main(int argc, char **argv) {
     serveraddr.sin_family = AF_INET; /* we are using the Internet */
     serveraddr.sin_addr.s_addr = htonl(INADDR_ANY); /* accept reqs to any IP addr */
     serveraddr.sin_port = htons((unsigned short)portno); /* port to listen on */
+
+    setsockopt(back_fd, SOL_SOCKET, SO_REUSEADDR,
+               (const void *)&optval , sizeof(int));
+    
+    /* build the server's internet address */
+    bzero((char *) &backaddr, sizeof(backaddr));
+    backaddr.sin_family = AF_INET; /* we are using the Internet */
+    backaddr.sin_addr.s_addr = htonl(INADDR_ANY); /* accept reqs to any IP addr */
+    backaddr.sin_port = htons((unsigned short)back_port); /* port to listen on */
     
     /* bind: associate the listening socket with a port */
     if (bind(listenfd, (struct sockaddr *) &serveraddr,
              sizeof(serveraddr)) < 0)
         error("ERROR on binding");
+
+    if (bind(back_fd, (struct sockaddr *) &backaddr,
+             sizeof(backaddr)) < 0)
+        error("ERROR on binding backend");
     
     /* listen: make it a listening socket ready to accept connection requests */
     if (listen(listenfd, 1) < 0) /* allow 5 requests to queue up */
         error("ERROR on listen");
     
+    FD_ZERO(&curr_set);
+    FD_ZERO(&live_set);
+    FD_SET(listenfd, &live_set);
+    FD_SET(back_fd, &live_set);
+
     /* main loop: wait for a connection request, echo input line,
      then close connection. */
     while (1) {
-        pthread_t thread;
-        /* Allocate space on the stack for client info */
-        client_info *client = malloc(sizeof(*client));
+        memcpy(&curr_set, &live_set, sizeof(live_set));  /*Copy over the live set of fds to curr_set since select overwrites*/
+        result = select(FD_SETSIZE, &curr_set, NULL, NULL, NULL);
 
-        /* Initialize the length of the address */
-        client->addrlen = sizeof(client->addr);
+        if(result < 0)
+          error("Select failed!");
+        left = result;
+        for(on_fd = 0; on_fd < FD_SETSIZE && left > 0; ++on_fd)
+        {
+          if (FD_ISSET(on_fd, &curr_set))
+          {
+              left--;
+              if(on_fd == listenfd)
+              {
+                //Listening Port Got a Request
 
-        /* accept: wait for a connection request */
-        client->connfd = accept(listenfd, (struct sockaddr *) &client->addr, &client->addrlen);
-
-        if (client->connfd < 0)
-            error("ERROR on accept");
-        
-        /* Connection is established; serve client and create new thread */
-        pthread_create(&thread, NULL, serve, client);// 
-        
+                while(new_fd != -1)
+                {
+                  new_fd = accept(listenfd, NULL, NULL);
+                  if(new_fd < 0)
+                  {
+                    printf("ACCEPT Failed with error fd: %d\n", new_fd);
+                  }
+                  else{
+                    printf("  New incoming connection - %d\n", new_fd);
+                    FD_SET(new_fd, &live_set);
+                  }
+                }
+              }
+              else if(on_fd == back_fd)
+              {
+                //BACKEND PORT WANTS SOME SERVICE BABY
+                void;
+              }
+              else
+              {
+                //SERVICE -- Get Request -- Could be ADD, VIEW, CONFIG, OR OTHER
+                printf("  Descriptor %d is readable\n", on_fd);
+                serve(on_fd, &live_set);
+              }
+          }
+        }
   }
 }
 
-void* serve(void* arg)
+
+
+
+
+
+void* serve(int connfd, fd_set* live_set)
 {
-  client_info* client = arg;
   char buf[BUFSIZE]; /* message buffer */
   char response[MAXLINE];
   long size;
-  struct hostent *hostp; /* client host info */
-  char *hostaddrp; /* dotted decimal host addr string */
+//  struct hostent *hostp; /* client host info */
+//  char *hostaddrp; /* dotted decimal host addr string */
   long total_size;
   char *buf_file;
   int n, p; /* message byte size */
@@ -401,10 +504,9 @@ void* serve(void* arg)
   int range_low = -1;
   int range_high = -1;
   char close_con = 0;
-  char* content_type; // check initialization
+  char* content_type = NULL; // check initialization
 
-  pthread_detach(pthread_self());
-  /* gethostbyaddr: determine who sent the message */
+/*  pthread_detach(pthread_self());
   hostp = gethostbyaddr((const char *)&(client->addr).sin_addr.s_addr,
                               sizeof(&(client->addr).sin_addr.s_addr), AF_INET);
   if (hostp == NULL)
@@ -413,12 +515,12 @@ void* serve(void* arg)
   if (hostaddrp == NULL)
       error("ERROR on inet_ntoa\n");
   printf("server established connection with %s (%s)\n",
-  hostp->h_name, hostaddrp);
+  hostp->h_name, hostaddrp);*/
 
   /* read: read input string from the client */
   bzero(buf, BUFSIZE);
 
-  n = read(client->connfd, buf, BUFSIZE);
+  n = read(connfd, buf, BUFSIZE);
   //Parse the request
   url_info sample = parse(buf);
   printf("%s parsed in to method: %s\npath: %s\n host: %s\n backend_port: %u\n rate: %u\n", 
@@ -437,7 +539,8 @@ void* serve(void* arg)
       }
       if(strcmp(key, "Connection") == 0 && strcmp(val, "close") == 0)
       {
-          close_con = 1;
+          close(connfd);
+          FD_CLR(connfd, live_set);
       }
       token = strtok(NULL, "\r\n");
   }
@@ -456,7 +559,8 @@ void* serve(void* arg)
   }
 
   if (strcmp(content_type, "x-icon")==0){
-    close(client->connfd);
+    close(connfd);
+    FD_CLR(connfd, live_set);
     return NULL;
   }
   
@@ -518,11 +622,11 @@ void* serve(void* arg)
       /* write: response to the client */
 
 
-      n = write(client->connfd, response, strlen(response));
+      n = write(connfd, response, strlen(response));
       if (n < 0)
            error("ERROR writing to socket");
       printf("%s", response);
-      p = write(client->connfd, buf_file, size);
+      p = write(connfd, buf_file, size);
       if (p<0)
           error("ERROR writing file to socket");
       fclose(file);
@@ -536,11 +640,10 @@ void* serve(void* arg)
         "Connection: Closed\r\n\r\n", sample.version, strlen(error404), get_rfc_time());
       printf("%s\n", response);
 
-      n = write(client->connfd, response, strlen(response));
-      p = write(client->connfd, error404, strlen(error404));
+      n = write(connfd, response, strlen(response));
+      p = write(connfd, error404, strlen(error404));
       error("404 Bad request: File not Found!!");
   }
-  close(client->connfd);
   return NULL;
 }
 
