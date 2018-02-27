@@ -264,6 +264,7 @@ url_info parse(char *buf){
                 //VIEW REQUEST
                 parse_url.pm = VIEW;
                 snprintf(parse_url.path , sizeof(path), "%s", path);
+                printf("PATH: %s\n\n", parse_url.path);
                 if (sscanf(path, "%[^.]%s", temp, ext) != 2)
                 {
                     printf("500 Internal Server Error:Received a malformed request due to extension \n");
@@ -297,6 +298,11 @@ url_info parse(char *buf){
                 if(strcmp(key, "path") == 0)
                 {
                     snprintf(parse_url.path , sizeof(val), "%s", val);
+                    if (sscanf(parse_url.path, "%[^.]%s", temp, ext) != 2)
+                    {
+                        printf("500 Internal Server Error: File Name incorrectly formatted \n");
+                    }
+                    snprintf(parse_url.ext , sizeof(ext), "%s", ext);
                 }
                 if(strcmp(key, "host") == 0)
                 {
@@ -532,8 +538,8 @@ void* serve(int connfd, fd_set* live_set)
     url_info sample = parse(buf);
     
 //    printf("heyyyyy: %s \n", buf);
-    printf("%s parsed in to method: %s\npath: %s\n host: %s\n backend_port: %u\n rate: %u\n",
-           buf, sample.method, sample.path, sample.host, sample.back_port, sample.rate);
+    printf("%s parsed in to method: %s\npath: %s\n host: %s\n backend_port: %u\n rate: %u\nextension: %s\n",
+           buf, sample.method, sample.path, sample.host, sample.back_port, sample.rate, sample.ext);
     
     
     //  sprintf(path, "./content%s", sample.path); // CHANGE PATH IF NEEDED in (.)
