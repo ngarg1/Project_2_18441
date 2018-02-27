@@ -67,11 +67,11 @@ typedef enum {
 
 /* Peer Functions*/
 typedef enum {
-    VIEW,
-    ADD,
-    CONFIG,
-    STATUS,
-    NONE
+    VIEW = 0,
+    ADD = 1,
+    CONFIG = 2,
+    STATUS = 3,
+    NONE = 4
 } peer_method;
 
 /* Client Info for Connection Thread*/
@@ -92,7 +92,7 @@ typedef struct {
     char ext[MAXLINE];
     char host[MAXLINE];
     unsigned int back_port;
-    unsigned int rate ;
+    unsigned int rate;
     parse_result result;
     peer_method pm;
 } url_info;
@@ -121,8 +121,8 @@ ftype file_types [] = {
 
 /*Our own custom UDP packet*/
 typedef struct {
-    char flags;                   //byte  0
-    char pack;                    //byte  1 ??
+    char flags;                   //byte  0     SAFX  (Syn, Ack, Fin, Unused)
+    char pack;                    //byte  1 
     uint16_t source_port;   //bytes 2  - 3
     uint16_t dest_port;     //bytes 4  - 5
     uint16_t length;        //bytes 6  - 7
@@ -130,6 +130,160 @@ typedef struct {
     uint16_t ack;           //bytes 10 - 11
     char* data;                   //bytes 12 - (12+length)
 } packet;
+
+/* addpeer struct for peer table */
+typedef struct{
+    char *filename;
+    struct sockaddr addr; //client socket address
+    unsigned short port;
+} New_peer;
+
+//static New_peer new_peer;
+
+/* peer database table*/
+New_peer my_db[100];
+static int db_entries = 0;
+
+/* newflow struct for flow table */
+typedef struct{
+    char pack; // ID for the flow
+    struct sockaddr addr;
+    socklen_t addrlen;
+    uint16_t base_syn;
+    uint16_t syn; //init
+    uint16_t ack;
+    char filename[MAXLINE];
+    uint16_t file_size;
+} New_flow;
+//static New_flow new_flow;
+
+/* flow database */
+New_flow my_flow[25];
+static int flow_entries = 0;
+static int back_port;
+static char flowID = 0;
+static uint16_t master_syn = 0;
+
+packet* unwrap(char* buf);
+char* package(packet* p);
+void addPeer(char *file, char *host, unsigned short int s_port);
+void flow(char flow_ID, unsigned int s_addr, unsigned short int s_port, uint16_t base_syn, char *file);
+packet* request_new_packet(char* path, char flowID, uint16_t source_port, uint16_t dest_port);
+char getFlowID();
+uint16_t getSeqeuence();
+void *serve(int connfd, fd_set* live_set);
+
+char getFlowID()
+{
+    flowID++;
+    return flowID;
+}
+
+uint16_t getSeqeuence()
+{
+    master_syn += 100;
+    return master_syn;
+}
+
+/* Addpeer: adds the peer address and port to the table */
+
+void addPeer(char *file, char* host, unsigned short int s_port){
+    New_peer* np;
+    struct addrinfo* ai;
+    struct addrinfo hints;
+    hints.ai_family = AF_INET;
+    printf("Adding new peer! %s %s %u\n", file, host, s_port);
+    int result = getaddrinfo(host, NULL, NULL, &ai);
+    //FIX THE GET ADDR INFO 
+
+    if (result) {
+      printf("Could not get host info from host specified!\n");
+      return;
+    }
+
+    for(int i = 0; i < db_entries; i++){
+        np = &my_db[i];
+        if (strcmp(np->filename, file) == 0) { //file found in database
+            return;
+        }
+    }
+
+    // if file not found, add to my_db (i value should be the one pointing to end of table from above
+    np = malloc(sizeof(New_peer));
+    np->filename = file;
+    np->addr = *(ai->ai_addr);
+    np->port = s_port;
+    my_db[db_entries] = *np;
+    db_entries++;
+    printf("added!");
+    return;
+}
+
+void getContent(char* path, int fd)
+{
+    struct sockaddr* provider;
+    unsigned short port;
+    char* buf;
+    packet* req;
+    New_flow nf;
+    for(int i = 0; i < db_entries; i++)
+    {
+        if(strcmp(my_db[i].filename, path) == 0)
+        {
+            provider = &(my_db[i].addr);
+            port = my_db[i].port;
+        }
+    }
+    if(provider == NULL)
+    {
+        printf("This file has not been added yet\n\n");
+        return;
+    }
+    req = request_new_packet(path, getFlowID(), back_port, port);
+    buf = package(req);
+
+    //Add to Flow Table
+    nf.pack = req->pack;
+    nf.addr = *provider;
+    nf.base_syn = req->syn;
+    nf.syn = req->syn;
+    strcpy(nf.filename, path);
+
+    my_flow[flow_entries] = nf;
+    flow_entries++;
+
+    //send the first request packet out
+    if(sendto(fd, buf, strlen(buf), 0, provider, sizeof(*provider)) < 0)
+        printf("Error sending first request packet");
+    return;
+}
+
+/*
+void flow(char flow_ID, unsigned int s_addr, unsigned short int s_port, uint16_t base_syn, char *file) {
+    New_flow* nf;
+    for(int i = 0; i < flow_entries; i++)
+    {
+        nf = &my_flow[i];
+        if(nf->pack == flow_ID) // Flow exists
+        {
+            printf("\n We tried to add an existing flow twice! \n");
+            return;//continue with the flow
+        }
+    }
+    // flow doesn't exist, add to the flow table and send
+    nf = malloc(sizeof(New_flow));
+    nf->pack = flow_ID;
+    nf->addr.sin_family = AF_INET;
+    nf->addr.sin_addr.s_addr = s_addr;
+    nf->addr.sin_port = s_port;
+    nf->base_syn = base_syn;
+    memcpy(nf->filename, file, strlen(file));
+    my_flow[flow_entries] = *nf;
+    flow_entries++;
+
+    // added to the flow table
+    return; //continue with UDP transfer  
+}*/
 
 char* package(packet* p) // storing in packet in buf
 {
@@ -162,8 +316,29 @@ packet* unwrap(char* buf)
 }
 
 
-void *serve(int connfd, fd_set* live_set);
+packet* request_new_packet(char* path, char flowID, uint16_t source_port, uint16_t dest_port)
+{
+    packet* p = (packet*)malloc(sizeof(packet));
+    p->flags = 0x4;  //0x0100  Syn, no Ack, no Fin
+    p->pack = flowID;
+    p->source_port = source_port;
+    p->dest_port = dest_port;
+    p->length = strlen(path);
+    p->syn = getSeqeuence();
+    p->ack = 67;    //NOT IMPORTANT
+    p->data = path;
+    return p;
+}
 
+/*
+packet* send_syn_ack(int fileLen, char flowID, uint16_t source_port, uint16_t dest_port)
+{
+    packet* p = (packet*)malloc(sizeof(packet));
+    p->flags = 0xc;
+    p->pack = flowID;
+    p->source_port = source_port;
+    p->dest_port = dest_port;
+}*/
 
 /*
  * error - wrapper for perror
@@ -194,7 +369,7 @@ char* get_rfc_time() {
     return time_string;
 }
 
-
+static int bps = 0;
 
 /*
  * parse - parse function takes care of the parsing of the requet sent by the
@@ -346,35 +521,10 @@ url_info parse(char *buf){
 }
 
 
-//Project 2 Parsing Change
-/*
- saved = path;
- sscanf(saved, "%[^&]&%s", path, saved);
- token = strtok(saved, "&");
- while (token) {
- sscanf(token, "%[^=]=%s", key, val);
- if(strcmp(key, "host") == 0)
- {
- snprintf(parse_url.host , sizeof(val), "%s", val);
- }
- if(strcmp(key, "port") == 0)
- {
- parse_url.back_port = (unsigned int)atoi(val);
- }
- if(strcmp(key, "rate") == 0)
- {
- parse_url.rate = (unsigned int)atoi(val);
- }
- token = strtok(NULL, "&");
- }*/
-//End Change
-
-
 int main(int argc, char **argv) {
     int listenfd; /* listening socket for http */
     int portno; /* port to listen on */
     int back_fd;
-    int back_port;
     int on_fd, left;
     int result;
     int new_fd = 0;
@@ -480,6 +630,8 @@ int main(int argc, char **argv) {
                 else if(on_fd == back_fd)
                 {
                     //BACKEND PORT WANTS SOME SERVICE BABY
+                    //recvfrom/
+
                     void;
                 }
                 else
@@ -494,39 +646,16 @@ int main(int argc, char **argv) {
 }
 
 
-
-
-
-
 void* serve(int connfd, fd_set* live_set)
 {
     char buf[BUFSIZE]; /* message buffer */
-    char response[MAXLINE];
-    long size;
-    //  struct hostent *hostp; /* client host info */
-    //  char *hostaddrp; /* dotted decimal host addr string */
-    long total_size;
-    char *buf_file;
-    int n, p; /* message byte size */
+    int n; /* message byte size */
     char *token = NULL;
     char key[200];
     char val[200];
-    char path[MAXLINE];
     int range_low = -1;
     int range_high = -1;
-    char close_con = 0;
-    char* content_type; // check initialization
-    
-    /*  pthread_detach(pthread_self());
-     hostp = gethostbyaddr((const char *)&(client->addr).sin_addr.s_addr,
-     sizeof(&(client->addr).sin_addr.s_addr), AF_INET);
-     if (hostp == NULL)
-     error("ERROR on gethostbyaddr");
-     hostaddrp = inet_ntoa((client->addr).sin_addr);
-     if (hostaddrp == NULL)
-     error("ERROR on inet_ntoa\n");
-     printf("server established connection with %s (%s)\n",
-     hostp->h_name, hostaddrp);*/
+    char* content_type = NULL; 
     
     /* read: read input string from the client */
     bzero(buf, BUFSIZE);
@@ -537,17 +666,10 @@ void* serve(int connfd, fd_set* live_set)
     //Parse the request
     url_info sample = parse(buf);
     
-//    printf("heyyyyy: %s \n", buf);
     printf("%s parsed in to method: %s\npath: %s\n host: %s\n backend_port: %u\n rate: %u\nextension: %s\n",
-           buf, sample.method, sample.path, sample.host, sample.back_port, sample.rate, sample.ext);
+           buf, sample.method, sample.path, sample.host, sample.back_port, sample.rate, sample.ext);   
     
-    
-    //  sprintf(path, "./content%s", sample.path); // CHANGE PATH IF NEEDED in (.)
-//    printf("Parsing this: %s\nLooking for: %s\n", buf, sample.path);
-    // printf("%s\n""buf"); printf("%s\n", sample.path);
-    
-    
-//    //Parse the headers
+    //Parse the headers
     token = strtok(buf, "\r\n");
     token = strtok(NULL, "\r\n");
     while (token) {
@@ -559,114 +681,55 @@ void* serve(int connfd, fd_set* live_set)
         }
         if(strcmp(key, "Connection") == 0 && strcmp(val, "close") == 0)
         {
-            close(connfd);
             FD_CLR(connfd, live_set);
+            close(connfd);
         }
         token = strtok(NULL, "\r\n");
     }
 
 
-//    printf("server received %d bytes: %s\n", n, buf);
     ftype *f_ext = file_types;
     while(f_ext->ext){
-        if(strcmp(f_ext->ext,sample.ext)==0){
+        if(strcmp(f_ext->ext,sample.ext)==0)
+        {
             content_type = f_ext->iana;
             break;
         }
         f_ext++;
     }
-//
-    if (strcmp(content_type, "x-icon")==0){
-        close(connfd);
-        FD_CLR(connfd, live_set);
+    if (strcmp(content_type, "x-icon")==0)
+    {
         return NULL;
     }
+    printf("peer method: %d\n", sample.pm);
     
-    /* Open the image on Desktop */
-    printf("here0\n");
-    FILE *file = fopen(sample.path,"r");
-    printf("pattth: %s \n", sample.path);
-    printf("here");
-    if(file) {
-        if(range_low == -1 || range_high == -1)
-        {
-            //No Range Request
-            printf("here1");
-            fseek(file,0, SEEK_END);
-            size = ftell(file);
-            fseek(file,0,SEEK_SET);
-            buf_file = malloc(size);
-            fread(buf_file,1,size,file);
-            sprintf(response, "HTTP/1.%c 200 OK\r\n", sample.version);
-        }
-        else
-        {
-            //Range Request
-            printf("here2");
-            fseek(file,0, SEEK_END);
-            total_size = ftell(file);
-            size = range_high - range_low;
-            fseek(file,range_low, SEEK_SET);
-            buf_file = malloc(size);
-            int br = fread(buf_file,sizeof(unsigned char),size+1,file);
-            sprintf(response, "HTTP/1.%c 206 Partial Content\r\n"
-                    "Content-Range: bytes %d-%d/%lu\r\n", sample.version,
-                    range_low, range_high, total_size);
-        }
-        printf("Sending %ld bytes\n\n", size);
-        sprintf(response,
-                "%sContent-Type: %s\r\n"
-                "Content-Length: %ld\r\n", response, content_type, size);
-        
-        //Get Last Modified Time
-        char time_last[30];
-        struct tm* ltm;
-        struct stat attrib;
-        stat(sample.path, &attrib);
-        ltm = gmtime(&(attrib.st_mtime));
-        sprintf(time_last, "%s, %d %s %d %d:%d:%d GMT", weekdays[ltm->tm_wday], ltm->tm_mday, months[ltm->tm_mon],
-                (ltm->tm_year + 1900), ltm->tm_hour, ltm->tm_min, ltm->tm_sec);
-        
-        if (close_con == 1){
-            sprintf(response,"%sDate: %s\r\n"
-                    "Last Modified: %s\r\n"
-                    "Connection: Keep-Alive\r\n"
-                    "Accept-Ranges: bytes\r\n"
-                    "Connection: Closed\r\n\r\n", response, get_rfc_time(), time_last);
-        }
-        else {
-            sprintf(response,"%sDate: %s\r\n"
-                    "Last Modified: %s\r\n"
-                    "Connection: Keep-Alive\r\n"
-                    "Accept-Ranges: bytes\r\n\r\n", response, get_rfc_time(), time_last);
-            
-        }
-        
-        /* write: response to the client */
-        
-        
-        n = write(connfd, response, strlen(response));
-        if (n < 0)
-            error("ERROR writing to socket");
-        printf("%s", response);
-        p = write(connfd, buf_file, size);
-        if (p<0)
-            error("ERROR writing file to socket");
-        fclose(file);
-    }
-    else
+    switch(sample.pm)
     {
-        sprintf(response, "HTTP/1.%c 404 Not Found\r\n"
-                "Content-Length: %d\r\n"
-                "Content-Type: text/html\r\n"
-                "Date: %s\r\n"
-                "Connection: Closed\r\n\r\n", sample.version, strlen(error404), get_rfc_time());
-        printf("%s\n", response);
-        
-        n = write(connfd, response, strlen(response));
-        p = write(connfd, error404, strlen(error404));
-        error("404 Bad request: File not Found!!");
+        case 1:   //ADD
+            printf("HTTP Server has seen a peer ADD request\n");
+            addPeer(sample.path, sample.host, (unsigned short int)sample.back_port);
+            if(sample.rate != 0)
+            {
+                bps = sample.rate;
+            }
+            break;
+
+        case 0:   //VIEW
+            printf("HTTP Server has seen a peer VIEW request\n");
+            //mgetContent(sample.path, connfd);
+            break;
+
+        case 2:   //CONFIG
+            printf("HTTP Server has seen a peer CONFIG request\n");
+            bps = sample.rate;
+            break;
+
+        default:  //
+            printf("HTTP Server has seen an unsupported request\n");
+            break;
     }
+
+    
     return NULL;
 }
 
