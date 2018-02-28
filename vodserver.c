@@ -175,7 +175,7 @@ void addPeer(char *file, char *host, unsigned short int s_port);
 void flow(char flow_ID, unsigned int s_addr, unsigned short int s_port, uint16_t base_syn, char *file);
 packet* request_new_packet(char* path, char flowID, uint16_t source_port, uint16_t dest_port);
 char getFlowID();
-uint16_t getSeqeuence();
+uint16_t getSequence();
 void *serve(int connfd, fd_set* live_set);
 
 char getFlowID()
@@ -184,7 +184,7 @@ char getFlowID()
     return (char)(rand()%255);
 }
 
-uint16_t getSeqeuence()
+uint16_t getSequence()
 {
 //Random Number Gen
     return (uint16_t)(rand());
@@ -382,8 +382,7 @@ packet* request_new_packet(char* path, char flowID, uint16_t source_port, uint16
     p->source_port = source_port;
     p->dest_port = dest_port;
     p->length = strlen(path);
-    p->syn = getSeqeuence();
-    p->base_syn = p->syn;
+    p->syn = getSequence();
     p->ack = 67;    //NOT IMPORTANT
     p->data = path;
     return p;
@@ -399,8 +398,7 @@ packet* get_syn_ack(char flowID, uint16_t dest_port, uint16_t ack, char* data)
     p->source_port = back_port;
     p->dest_port = dest_port;
     p->ack = ack + 1;
-    p->base_syn = ack;
-    p->syn = getSeqeuence();
+    p->syn = getSequence();
     p->length = strlen(data);
     p->data = malloc(sizeof(char) * p->length);
 
@@ -608,7 +606,7 @@ void backend(int on_fd)
     long size;
     socklen_t sender_len;
     packet* p;
-    New_flow nf;
+    New_flow* nf;
     if(recvfrom(on_fd, buf, MAXLINE, 0, &sender, &sender_len) < 0)
     {
         printf("Error receiving packet on Backend Connection\n\n");
@@ -660,12 +658,12 @@ void backend(int on_fd)
 
         if(nf == NULL)
         {
-            printf("Could not find the flow that a SYN ACK responds to\n")
+            printf("Could not find the flow that a SYN ACK responds to\n");
             return;
         }
 
         //send headers
-        sendHeaders(p->data, nf.filename, nf.client_fd);
+        sendHeaders(p->data, nf->filename, nf->client_fd);
 
         //Check to see that the seq number is good
         if((p->ack - nf->syn) != 1)
@@ -678,7 +676,7 @@ void backend(int on_fd)
         packet* g = get_ack(p);
 
 
-        //send syn ack
+        //send ack
         strcpy(buf, package(g));
         if(sendto(on_fd, buf, strlen(buf), 0, &sender, sizeof(sender)) < 0)
         {
@@ -698,34 +696,42 @@ void backend(int on_fd)
         //Normal ACK Case
 
         //Look Up the Flow
-        nf = flow_look(p->pack)
+        nf = flow_look(p->pack);
         if(nf == NULL)
         {
-            printf("Could not find the flow that the ACK responds to\n")
+            printf("Could not find the flow that the ACK responds to\n");
             return;
         }
 
 
-        if(nf.client_fd == -1)
+        if(nf->client_fd == -1)
         {
             //Sender of Data
-            if(p->ack - nf.syn != 1)
+            //make sure in sync
+            if(p->ack - nf->syn != 1)
             {
                 printf("Out of sync!!");
+                //resend last packet
             }
             //Find specified block of data
-            int index = p->syn - nf.base_syn - 1;
-            fseek(nf.file, 1400 * index, SEEK_SET);
+            int index = p->syn - nf->base_syn - 1;
+            fseek(nf->file, 1400 * index, SEEK_SET);
 
             //get ack skeleton
             packet* g = get_ack(p);
 
             //fill data
             g->data = malloc(sizeof(char)*1400);
-            int br = fread(g->data, 1, 1400, nf.file);
+            int br = fread(g->data, 1, 1400, nf->file);
             g->length = br;
 
-            //send syn ack
+            //Check if you finished the file
+            if(br < 1400)
+            {
+                g->flags = (g->flags | 0x02);  //flags = flags | 0x0010  set FIN flag
+            }
+
+            //send ack
             strcpy(buf, package(g));
             if(sendto(on_fd, buf, strlen(buf), 0, &sender, sizeof(sender)) < 0)
             {
@@ -738,13 +744,79 @@ void backend(int on_fd)
             nf->ack = g->ack;
 
             free(p);
-
-
         }
         else
         {
+            //CHANGES AFTER SANI STARTED LOOKING
+
             //Receiver of Data
+            //make sure in sync
+            if(p->ack - nf->syn != 1)
+            {
+                printf("Out of sync!!");
+                //resend last packet
+            }
+            //send data
+            if(write(nf->client_fd, p->data, p->length) < 0)
+            {
+                printf("Failed writing to client socket with file data\n");
+            }
+
+            //Send ack
+            packet* g = get_ack(p);
+
+            strcpy(buf, package(g));
+            if(sendto(on_fd, buf, strlen(buf), 0, &sender, sizeof(sender)) < 0)
+            {
+                printf("Error while trying to send a SYN ACK");
+                return;
+            }
+
+            //update flow table
+            nf->syn = g->syn;
+            nf->ack = g->ack;
         }
+    }
+    else if(p->flags == 0x0a)
+    {
+        //FIN ACK
+        //look up flow
+        nf = flow_look(p->pack);
+        if(nf == NULL)
+        {
+            printf("Could not find the flow that the ACK responds to\n");
+            return;
+        }
+
+        //see if in sync
+        if(p->ack - nf->syn != 1)
+        {
+            printf("Out of sync!!");
+            //resend last packet
+        }
+
+        
+        if(nf->client_fd == -1)
+        {
+            //There should be last bit of data to relay
+            
+            //send data
+            if(write(nf->client_fd, p->data, p->length) < 0)
+            {
+                printf("Failed writing to client socket with file data\n");
+            }
+            packet* g = get_ack(p);
+            g->flags = g->flags | 0x02; //Set the fin flag
+
+            //Send the fin ack
+            strcpy(buf, package(g));
+            if(sendto(on_fd, buf, strlen(buf), 0, &sender, sizeof(sender)) < 0)
+            {
+                printf("Error while trying to send a SYN ACK");
+                return;
+            }
+        }
+        remove_flow(nf->pack);
     }
 }
 
@@ -952,7 +1024,7 @@ void* serve(int connfd, fd_set* live_set)
 
         case 0:   //VIEW
             printf("HTTP Server has seen a peer VIEW request\n");
-            //mgetContent(sample.path, connfd);
+            getContent(sample.path, connfd);
             break;
 
         case 2:   //CONFIG
