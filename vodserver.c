@@ -132,13 +132,11 @@ typedef struct {
     char* data;                   //bytes 12 - (12+length)
 } packet;
 
-/* addpeer struct for peer table */
 typedef struct{
     char *filename;
-    struct sockaddr addr; //client socket address
+    struct sockaddr_in addr; //client socket address
     unsigned short port;
 } New_peer;
-
 //static New_peer new_peer;
 
 /* peer database table*/
@@ -171,12 +169,20 @@ static int back_fd;
 
 packet* unwrap(char* buf);
 char* package(packet* p);
-void addPeer(char *file, char *host, unsigned short int s_port);
+void addPeer(char *file, struct sockaddr_in, unsigned short int s_port);
 void flow(char flow_ID, unsigned int s_addr, unsigned short int s_port, uint16_t base_syn, char *file);
 packet* request_new_packet(char* path, char flowID, uint16_t source_port, uint16_t dest_port);
 char getFlowID();
 uint16_t getSequence();
 void *serve(int connfd, fd_set* live_set);
+
+/*
+ * error - wrapper for perror
+ */
+void error(char *msg) {
+    perror(msg);
+    exit(1);
+}
 
 char getFlowID()
 {
@@ -192,38 +198,70 @@ uint16_t getSequence()
 
 /* Addpeer: adds the peer address and port to the table */
 
-void addPeer(char *file, char* host, unsigned short int s_port){
+void addPeer(char *file, struct sockaddr_in serveraddr, unsigned short int s_port){
+    
     New_peer* np;
-    struct addrinfo* ai;
-    struct addrinfo hints;
-    hints.ai_family = AF_INET;
-    printf("Adding new peer! %s %s %u\n", file, host, s_port);
-    int result = getaddrinfo(host, NULL, NULL, &ai);
-    //FIX THE GET ADDR INFO 
-
-    if (result) {
-      printf("Could not get host info from host specified!\n");
-      return;
-    }
-
-/*
+    printf("Adding new peer! %s %d %u\n", file, serveraddr.sin_addr.s_addr, s_port);
+    //FIX THE GET ADDR INFO
+    
     for(int i = 0; i < db_entries; i++){
         np = &my_db[i];
-        if (strcmp(np->filename, file) == 0 && ) { //file found in database
+        if (strcmp(np->filename, file) == 0) { //file found in database
             return;
         }
-    }*/
-
+    }
     // if file not found, add to my_db (i value should be the one pointing to end of table from above
     np = malloc(sizeof(New_peer));
     np->filename = file;
-    np->addr = *(ai->ai_addr);
+    np->addr = serveraddr;
     np->port = s_port;
     my_db[db_entries] = *np;
     db_entries++;
-    printf("added!");
+    printf("added!\n");
     return;
 }
+
+void sendHeaders(char* file_size, char* filename, int clientfd){
+    
+    int n;
+    char temp[MAXLINE];
+    char extension[MAXLINE];
+    char* content_type;
+    char response[MAXLINE];
+    
+    if (sscanf(filename, "%[^.]%s", temp, extension) != 2) {
+        printf("500 Internal Server Error:Received a malformed request due to extension \n");
+        exit(1);
+        return;
+    }
+    
+    ftype *f_ext = file_types;
+    while(f_ext->ext){
+        if(strcmp(f_ext->ext,extension)==0){
+            content_type = f_ext->iana;
+            break;
+        }
+        f_ext++;
+    }
+    
+    if (strcmp(content_type, "x-icon")==0){
+        return;
+    }
+    
+    sprintf(response, "HTTP/1.1 200 OK\r\n",
+            "Content-Type: %s\r\n"
+            "Content-Length: %ld\r\n", content_type, file_size);
+    
+    // Write response to fd
+    
+    n = write(clientfd, response, strlen(response));
+    if (n < 0)
+        error("ERROR writing to socket");
+    printf("%s", response);
+    return;
+    
+}
+
 
 New_flow* flow_look(char flow_ID)
 {
@@ -421,13 +459,7 @@ packet* get_ack(packet* p)
     return g;
 }
 
-/*
- * error - wrapper for perror
- */
-void error(char *msg) {
-    perror(msg);
-    exit(1);
-}
+
 
 
 /* Time Declarations */
@@ -495,6 +527,7 @@ url_info parse(char *buf){
     /* version must be either HTTP/1.0 or HTTP/1.1 */
     if (sscanf(buf, "%s %s HTTP/1.%c", method, path, &version) != 3
         || (version != '0' && version != '1')) {
+        printf("\n\nBUF: %s\n", buf);
         printf("500 Internal Server Error: Received a malformed request due to method/path/version\n");
         parse_url.result = PARSE_ERROR;
         return parse_url;
@@ -510,7 +543,7 @@ url_info parse(char *buf){
     else
     {
         printf("\nPEER: %s\n METHOD: %s\n PARAMS: %s\n", peer, pm, params);
-        if(strcmp(params, "") == 0)
+        if(pm[0] == 'v')
         {
             //No parameters means this is a view or status request
             sscanf(pm, "%[^/]%s", temp, path);
@@ -817,6 +850,7 @@ void backend(int on_fd)
             }
         }
         remove_flow(nf->pack);
+        free(nf);
     }
 }
 
@@ -897,19 +931,18 @@ int main(int argc, char **argv) {
     
     /* main loop */
     while (1) {
-        memcpy(&curr_set, &live_set, sizeof(live_set));  /*Copy over the live set of fds to curr_set since select overwrites*/
+        curr_set = live_set;
         // curr_set always overwritten from the beginning???\
         // where do we set FD_SETSIZE?
         result = select(FD_SETSIZE, &curr_set, NULL, NULL, NULL);
         
         if(result < 0)
             error("Select failed!");
-        left = result;
-        for(on_fd = 0; on_fd < FD_SETSIZE && left > 0; ++on_fd)
+        for(on_fd = 0; on_fd < FD_SETSIZE; ++on_fd)
         {
             if (FD_ISSET(on_fd, &curr_set))
             {
-                left--;
+                printf("ON_FD is %d \n", on_fd);
                 if(on_fd == listenfd)
                 {
                     //Listening Port Got a Request
@@ -957,6 +990,11 @@ void* serve(int connfd, fd_set* live_set)
     int range_low = -1;
     int range_high = -1;
     char* content_type = NULL; 
+
+    struct sockaddr_in serveraddr;
+    struct hostent *server;
+    int sockfd;
+
     
     /* read: read input string from the client */
     bzero(buf, BUFSIZE);
@@ -965,10 +1003,19 @@ void* serve(int connfd, fd_set* live_set)
     if (n < 0)
         error("ERROR reading from socket");
     //Parse the request
-    url_info sample = parse(buf);
+    url_info* sample = (url_info*)malloc(sizeof(url_info));
+    bzero(sample, sizeof(url_info));
+    *sample = parse(buf);
+
+    if(sample->result == 0)
+    {
+        FD_CLR(connfd, live_set);
+        close(connfd);
+        return NULL;
+    }
     
     printf("%s parsed in to method: %s\npath: %s\n host: %s\n backend_port: %u\n rate: %u\nextension: %s\n",
-           buf, sample.method, sample.path, sample.host, sample.back_port, sample.rate, sample.ext);   
+           buf, sample->method, sample->path, sample->host, sample->back_port, sample->rate, sample->ext);   
     
     //Parse the headers
     token = strtok(buf, "\r\n");
@@ -991,7 +1038,7 @@ void* serve(int connfd, fd_set* live_set)
 
     ftype *f_ext = file_types;
     while(f_ext->ext){
-        if(strcmp(f_ext->ext,sample.ext)==0)
+        if(strcmp(f_ext->ext,sample->ext)==0)
         {
             content_type = f_ext->iana;
             break;
@@ -1002,34 +1049,49 @@ void* serve(int connfd, fd_set* live_set)
     {
         return NULL;
     }
-    printf("peer method: %d\n", sample.pm);
+    printf("peer method: %d\n", sample->pm);
     
-    switch(sample.pm)
+    switch(sample->pm)
     {
         case 1:   //ADD
             printf("HTTP Server has seen a peer ADD request\n");
-            addPeer(sample.path, sample.host, (unsigned short int)sample.back_port);
-            if(sample.rate != 0)
-            {
-                bps = sample.rate;
+            
+            /* socket: create the socket */
+            sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+            if (sockfd < 0)
+                error("ERROR opening socket");
+            
+            /* gethostbyname: get the server's DNS entry */
+            server = gethostbyname((const char *)sample->host);
+            
+            if (server == NULL) {
+                fprintf(stderr,"ERROR, no such host as %s\n", sample->host);
+                exit(1);
             }
 
-
-            sprintf(response, "HTTP/1.%c 200 OK\r\n\r\n", sample.version);
-            n = write(connfd, response, strlen(response));
-            if (n < 0)
-                error("ERROR writing to socket");
-            printf("%s", response);
+            /* build the server's Internet address */
+            bzero((char *) &serveraddr, sizeof(serveraddr));
+            serveraddr.sin_family = AF_INET;
+            bcopy((char *)server->h_addr,
+                  (char *)&serveraddr.sin_addr.s_addr, server->h_length);
+            serveraddr.sin_port = htons(sample->back_port);
+            
+            
+            addPeer(sample->path, serveraddr, (unsigned short int)sample->back_port);
+            if(sample->rate != 0)
+            {
+                bps = sample->rate;
+            }
             break;
 
         case 0:   //VIEW
             printf("HTTP Server has seen a peer VIEW request\n");
-            getContent(sample.path, connfd);
+            getContent(sample->path, connfd);
             break;
 
         case 2:   //CONFIG
             printf("HTTP Server has seen a peer CONFIG request\n");
-            bps = sample.rate;
+            bps = sample->rate;
             break;
 
         default:  //
