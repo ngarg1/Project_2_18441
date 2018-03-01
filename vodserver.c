@@ -184,6 +184,17 @@ void error(char *msg) {
     exit(1);
 }
 
+void printPacket(packet* p)
+{
+    printf("------------------------Printing Packet-------------------------------------------\n");
+    printf("flags: %u | flowID: %d | source_port: %u\n", p->flags, (int)p->pack, p->source_port);
+    printf("dest_port: %u | length: %u\n", p->dest_port, p->length);
+    printf("syn: %u | ack: %u\n", p->syn, p->ack);
+    printf("data: %s\n", p->data);
+    printf("-----------------------------End Packet-------------------------------------------\n");
+
+}
+
 char getFlowID()
 {
 //Random Number Gen
@@ -205,6 +216,7 @@ void addPeer(char *file, struct sockaddr_in serveraddr, unsigned short int s_por
     //FIX THE GET ADDR INFO
     
     for(int i = 0; i < db_entries; i++){
+        printf("Checking #%d %s\n", i, my_db[i].filename);
         np = &my_db[i];
         if (strcmp(np->filename, file) == 0) { //file found in database
             return;
@@ -260,6 +272,11 @@ void sendHeaders(char* file_size, char* filename, int clientfd){
     printf("%s", response);
     return;
     
+}
+
+int send_len(packet* p)
+{
+    return 12 + strlen(p->data);
 }
 
 
@@ -320,7 +337,7 @@ New_flow flow_add(char flow_ID, struct sockaddr addr, uint16_t syn, uint16_t ack
 
 void getContent(char* path, int fd)
 {
-    struct sockaddr* provider;
+    struct sockaddr* provider = NULL;
     unsigned short port;
     char* buf;
     packet* req;
@@ -328,8 +345,10 @@ void getContent(char* path, int fd)
     //Look for who has the file in the lookup table
     for(int i = 0; i < db_entries; i++)
     {
+        printf("Checking #%d %s\n", i, my_db[i].filename);
         if(strcmp(my_db[i].filename, path) == 0)
         {
+            printf("Found the file!\n");
             provider = &(my_db[i].addr);
             port = my_db[i].port;
         }
@@ -343,47 +362,24 @@ void getContent(char* path, int fd)
     //create a new request packet
     req = request_new_packet(path, getFlowID(), back_port, port);
     buf = package(req);
+    printf("Sending Request Packet: \n");
+    printPacket(req);
 
     //Add to Flow Table
     flow_add(req->pack, *provider, req->syn, 0, path, NULL, 0, fd);
 
     //send the first request packet out
     //Timeout ask again sitch
-    if(sendto(back_fd, buf, strlen(buf), 0, provider, sizeof(*provider)) < 0)
+    printf("Send Length: %d\n", send_len(req));
+    if(sendto(back_fd, buf, send_len(req), 0, provider, sizeof(*provider)) < 0)
         printf("Error sending first request packet");
     return;
 }
 
-/*
-void flow(char flow_ID, unsigned int s_addr, unsigned short int s_port, uint16_t base_syn, char *file) {
-    New_flow* nf;
-    for(int i = 0; i < flow_entries; i++)
-    {
-        nf = &my_flow[i];
-        if(nf->pack == flow_ID) // Flow exists
-        {
-            printf("\n We tried to add an existing flow twice! \n");
-            return;//continue with the flow
-        }
-    }
-    // flow doesn't exist, add to the flow table and send
-    nf = malloc(sizeof(New_flow));
-    nf->pack = flow_ID;
-    nf->addr.sin_family = AF_INET;
-    nf->addr.sin_addr.s_addr = s_addr;
-    nf->addr.sin_port = s_port;
-    nf->base_syn = base_syn;
-    memcpy(nf->filename, file, strlen(file));
-    my_flow[flow_entries] = *nf;
-    flow_entries++;
-
-    // added to the flow table
-    return; //continue with UDP transfer  
-}*/
 
 char* package(packet* p) // storing in packet in buf
 {
-    char* buf = malloc(sizeof(char)*p->length + 12); // ??
+    char* buf = malloc(sizeof(char)*p->length + sizeof(char)*12); // ??
     memcpy(buf, &(p->flags), 1);
     memcpy(buf+1, &(p->pack), 1);
     memcpy(buf+2, &(p->source_port), 2);
@@ -405,7 +401,6 @@ packet* unwrap(char* buf)
     memcpy(&(p->length), buf+6, 2);
     memcpy(&(p->syn), buf+8, 2);
     memcpy(&(p->ack), buf+10, 2);
-    printf("\n1: %u 2: %u 3: %u\n", p->source_port, p->syn, p->ack);
     p->data = malloc(sizeof(char) * p->length);
     strncpy(p->data, buf+12, p->length);
     return p;
@@ -546,7 +541,7 @@ url_info parse(char *buf){
         if(pm[0] == 'v')
         {
             //No parameters means this is a view or status request
-            sscanf(pm, "%[^/]%s", temp, path);
+            sscanf(pm, "%[^/]/%s", temp, path);
             if(strcmp(temp, "view") == 0)
             {
                 token = strtok(NULL, "");
@@ -611,18 +606,7 @@ url_info parse(char *buf){
         
         
     }
-    
-    // printf("path: %s\n", path);
-    // printf("Parsing this: %s\n", buf);
-    
-    /*if (sscanf(path, "%[^.]%s", temp, ext) != 2) {
-     printf("500 Internal Server Error:Received a malformed request due to extension \n");
-     parse_url.result = PARSE_ERROR;
-     return parse_url;
-     }
-     snprintf(parse_url.method , sizeof(method), "%s", method);
-     snprintf(parse_url.path   , sizeof(path), "%s", path);
-     snprintf(parse_url.ext  , sizeof(ext), "%s", ext);*/
+
      parse_url.version = version;
      parse_url.result = PARSE_CORRECT;
     return parse_url;
@@ -645,7 +629,10 @@ void backend(int on_fd)
         printf("Error receiving packet on Backend Connection\n\n");
         return;
     }
+    printf("Buf: %x | %x | %x | %s\n\n", buf, (buf+4), (buf+8), (buf+12));
     p = unwrap(buf);
+    printf("Received Packed: \n");
+    printPacket(p);
     if(p->flags == 0x04)
     {
         //No Ack, but Syn
@@ -677,7 +664,7 @@ void backend(int on_fd)
         
         //send syn ack
         strcpy(buf, package(g));
-        if(sendto(on_fd, buf, strlen(buf), 0, &sender, sizeof(sender)) < 0)
+        if(sendto(on_fd, buf, send_len(g), 0, &sender, sizeof(sender)) < 0)
         {
             printf("Error while trying to send a SYN ACK");
             return;
@@ -711,7 +698,7 @@ void backend(int on_fd)
 
         //send ack
         strcpy(buf, package(g));
-        if(sendto(on_fd, buf, strlen(buf), 0, &sender, sizeof(sender)) < 0)
+        if(sendto(on_fd, buf, send_len(g), 0, &sender, sizeof(sender)) < 0)
         {
             printf("Error while trying to send a SYN ACK");
             return;
@@ -766,7 +753,7 @@ void backend(int on_fd)
 
             //send ack
             strcpy(buf, package(g));
-            if(sendto(on_fd, buf, strlen(buf), 0, &sender, sizeof(sender)) < 0)
+            if(sendto(on_fd, buf, send_len(g), 0, &sender, sizeof(sender)) < 0)
             {
                 printf("Error while trying to send a SYN ACK");
                 return;
@@ -799,7 +786,7 @@ void backend(int on_fd)
             packet* g = get_ack(p);
 
             strcpy(buf, package(g));
-            if(sendto(on_fd, buf, strlen(buf), 0, &sender, sizeof(sender)) < 0)
+            if(sendto(on_fd, buf, send_len(g), 0, &sender, sizeof(sender)) < 0)
             {
                 printf("Error while trying to send a SYN ACK");
                 return;
@@ -843,7 +830,7 @@ void backend(int on_fd)
 
             //Send the fin ack
             strcpy(buf, package(g));
-            if(sendto(on_fd, buf, strlen(buf), 0, &sender, sizeof(sender)) < 0)
+            if(sendto(on_fd, buf, send_len(g), 0, &sender, sizeof(sender)) < 0)
             {
                 printf("Error while trying to send a SYN ACK");
                 return;
