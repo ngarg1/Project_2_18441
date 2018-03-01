@@ -3,7 +3,7 @@ ARGS = -Wall -O2 -I .
 
 all: vodserver echoclient new_packet
 
-vodserver: vodserver
+vodserver: vodserver.c
 	$(CC) $(ARGS) -o vodserver vodserver.c
 
 echoclient: echoclient.c
