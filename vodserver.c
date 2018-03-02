@@ -312,8 +312,8 @@ int remove_flow(char flow_ID)
     while(i < flow_entries)
     {
         my_flow[i] = my_flow[i+1];
+        i++;
     }
-    free(nf);
     return res;
 }
 

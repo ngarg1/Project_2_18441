@@ -66,9 +66,9 @@ void printFlowTable()
     printf("~~~~~~~~~~~f l o w      t a b l e~~~~~~~~~~~~~~\n");
     for(int i = 0; i < flow_entries; i++)
     {
-        printf("%d: %s |", my_flow[i].pack, my_flow[i].filename);
+        printf("%d: %s | ", my_flow[i].pack, my_flow[i].filename);
     }
-    printf("\n~~~~~~~~~~~e n d     t a b l e \n~~~~~~~~~~~~~~\n");
+    printf("\n~~~~~~~~~~~e n d     t a b l e ~~~~~~~~~~~~~~\n");
 }
 
 void printPacket(packet* p)
@@ -114,8 +114,8 @@ int remove_flow(char flow_ID)
     while(i < flow_entries)
     {
         my_flow[i] = my_flow[i+1];
+        i++;
     }
-    free(nf);
     return res;
 }
 
@@ -186,6 +186,7 @@ int main(int argc, char **argv)
     char* buf = "Hi everybody this is great ";
     char* pack;
     char* path = "content/hb.mp4";
+    New_flow* nf; 
     packet* p = request_new_packet(path, 5, 4045, 4045);
     /*(packet *)malloc(sizeof(packet));
     p->source_port = 1992;
@@ -208,5 +209,28 @@ int main(int argc, char **argv)
     printFlowTable();
     struct sockaddr s;
     flow_add(1, s, 1, 1, "content/hb.mp4", NULL, 400, 1);
+    nf = flow_look(1);
+    printf("Found: %s\n", nf->filename);
     printFlowTable();
+    flow_add(2, s, 2, 2, "some other file", NULL, 400, 2);
+    flow_add(3, s, 3, 3, "happy.mp4", NULL, 400, 3);
+    nf = flow_look(1);
+    printf("Found: %s\n", nf->filename);
+    nf = flow_look(2);
+    printf("Found: %s\n", nf->filename);
+    nf = flow_look(3);
+    printf("Found: %s\n", nf->filename);
+
+    nf = flow_look(4);
+    if(nf == NULL)
+        printf("It is good that 4 was not found\n");
+    printFlowTable();
+    remove_flow(2);
+    printFlowTable();
+    nf = flow_look(2);
+    if(nf == NULL)
+        printf("It is good that 4 was not found!\n");
+
+
+
 }
