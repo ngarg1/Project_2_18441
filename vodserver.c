@@ -184,6 +184,17 @@ void error(char *msg) {
     exit(1);
 }
 
+void printFlowTable()
+{
+    printf("~~~~~~~~~~~f l o w      t a b l e~~~~~~~~~~~~~~\n");
+    for(int i = 0; i < flow_entries; i++)
+    {
+        printf("%d: %s | ", my_flow[i].pack, my_flow[i].filename);
+    }
+    printf("\n~~~~~~~~~~~e n d     t a b l e ~~~~~~~~~~~~~~\n");
+}
+
+
 void printPacket(packet* p)
 {
     printf("------------------------Printing Packet-------------------------------------------\n");
