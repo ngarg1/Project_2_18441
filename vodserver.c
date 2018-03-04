@@ -271,7 +271,7 @@ void sendHeaders(char* file_size, char* filename, int clientfd){
         return;
     }
     
-    sprintf(response, "HTTP/1.1 200 OK\r\n",
+    sprintf(response, "HTTP/1.1 200 OK\r\n"
             "Content-Type: %s\r\n"
             "Content-Length: %ld\r\n", content_type, file_size);
     
@@ -539,7 +539,8 @@ url_info parse(char *buf){
         return parse_url;
     }
     snprintf(parse_url.method , sizeof(method), "%s", method);
-    printf("\n\n\nPATH with everything: %s\n", path);
+    // printf("\n\n\nPATH with everything: %s\n", path);
+    ///peer/add?path=/Users/Sanika/Desktop/Documents/Project_2_18441/content/hi.jpg&host=localhost&port=8005
     if(sscanf(path, "%*c%[^/]%*c%[^?]%s", peer, pm, params) < 2 || strcmp(peer, "peer") !=0)
     {
         printf("\n\nNOT A VALID URI FOR PROJECT 2\n\n");
@@ -987,6 +988,10 @@ void* serve(int connfd, fd_set* live_set)
     char response[MAXLINE];
     int range_low = -1;
     int range_high = -1;
+    char my_file[200];
+    char key1[200];
+    char val1[200];
+    char *token1 = NULL;
     char* content_type = NULL; 
 
     struct sockaddr_in serveraddr;
@@ -1033,7 +1038,6 @@ void* serve(int connfd, fd_set* live_set)
         token = strtok(NULL, "\r\n");
     }
 
-
     ftype *f_ext = file_types;
     while(f_ext->ext){
         if(strcmp(f_ext->ext,sample->ext)==0)
@@ -1072,8 +1076,11 @@ void* serve(int connfd, fd_set* live_set)
             serveraddr.sin_family = AF_INET;
             bcopy((char *)server->h_addr,
                   (char *)&serveraddr.sin_addr.s_addr, server->h_length);
+
             serveraddr.sin_port = htons(sample->back_port);
-            
+
+
+            printf("Before addpeer path is: %s\n", sample->path);
             
             addPeer(sample->path, serveraddr, (unsigned short int)sample->back_port);
             if(sample->rate != 0)
@@ -1083,6 +1090,24 @@ void* serve(int connfd, fd_set* live_set)
             break;
 
         case 0:   //VIEW
+    	    token1 = strtok(sample->path,"\r\n");
+			while(token1) {
+	// printf("path entering is %s\n", sample->path);
+				sscanf(token1, "%*c%[^/]%s", key1, val1);
+				printf("key: %s\n", key1);
+				printf("this should be my real file path: %s\n", val1);
+				if (strcmp(key1, "view")==0) 
+				{
+		    		printf("my_filllleeeeeee-1204-29580873900----------------------------------------------");
+		    		strcpy(my_file,val1);
+		    		//my_file = val1;
+		    		token1 = strtok(NULL, "\r\n");
+		    		break;
+				}
+				else
+				token1++;
+			}
+
             printf("HTTP Server has seen a peer VIEW request\n");
             getContent(sample->path, connfd);
             break;
