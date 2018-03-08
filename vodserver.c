@@ -175,6 +175,7 @@ packet* request_new_packet(char* path, char flowID, uint16_t source_port, uint16
 char getFlowID();
 uint16_t getSequence();
 void *serve(int connfd, fd_set* live_set);
+char* get_rfc_time();
 
 /*
  * error - wrapper for perror
@@ -271,8 +272,11 @@ void sendHeaders(char* file_size, char* filename, int clientfd){
     }
     
     sprintf(response, "HTTP/1.1 200 OK\r\n"
+            "Connection: Keep-Alive\r\n"
+            "Accept-Ranges: bytes\r\n"
+            "Date: %s\r\n"
             "Content-Type: %s\r\n"
-            "Content-Length: %s\r\n", content_type, file_size);
+            "Content-Length: %s\r\n\r\n", get_rfc_time(), content_type, file_size);
     
     // Write response to fd
     
@@ -484,7 +488,7 @@ char* get_rfc_time() {
     tm = gmtime(&t);
     sprintf(time_string, "%s, %d %s %d %d:%d:%d GMT", weekdays[tm->tm_wday], tm->tm_mday, months[tm->tm_mon],
             (tm->tm_year + 1900), tm->tm_hour, tm->tm_min, tm->tm_sec);
-    return time_string;
+    return (char*)time_string;
 }
 
 static int bps = 0;
@@ -770,7 +774,6 @@ void backend(int on_fd)
             //Find specified block of data
             int index = p->ack - nf->base_syn - 1;
             fseek(nf->file, 1400 * index, SEEK_SET);
-            printf("\nSetting file to DATA index %d\n\n", index);
 
             //get ack skeleton
             g = get_ack(p);
@@ -780,7 +783,7 @@ void backend(int on_fd)
             int br = fread(g->data, 1, 1400, nf->file);
             g->length = br;
 
-            printf("\n# of bytres read %d\n\n", br);
+            printf("\nRead and forwarded bytes from %d to %d\n\n", index*1400, (index*1400+br));
 
             //Check if you finished the file
             if(br < 1400)
@@ -790,8 +793,8 @@ void backend(int on_fd)
 
             //send ack
             memcpy(buf, package(g), send_len(g));
-            printf("Sending Packet:\n");
-            printPacket(g);
+            //printf("Sending Packet:\n");
+            //printPacket(g);
 
             if(sendto(on_fd, buf, send_len(g), 0, (struct sockaddr*)&sender, sizeof(sender)) < 0)
             {
@@ -807,7 +810,7 @@ void backend(int on_fd)
         else
         {
             //Receiver of Data
-            printf("Normal ACK Case -- I am the receiver\n");
+            printf("Normal ACK Case -- I am the receiver with clientfd: %d\n", nf->client_fd);
 
             //make sure in sync
             if(p->ack - nf->syn != 1)
@@ -860,7 +863,7 @@ void backend(int on_fd)
         }
 
         
-        if(nf->client_fd == -1)
+        if(nf->client_fd != -1)
         {
             //There should be last bit of data to relay
             printf("Received a FIN ACK -- I am the receiver sending the last bits to HTTP\n");
