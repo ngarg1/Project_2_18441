@@ -104,6 +104,7 @@ typedef struct {
 } ftype;
 
 ftype file_types [] = {
+    {".txt", "text/plain"},
     {".css", "text/css"},
     {".htm", "text/html"},
     {".html", "text/html"},
@@ -663,7 +664,7 @@ void backend(int on_fd)
         //Receiving a new connection
         if(flow_look(p->pack) != NULL)
         {
-            printf("This flow id is already in use!");
+            printf("This flow id is already in use!\n\n");
             return;
         }
 
@@ -672,7 +673,7 @@ void backend(int on_fd)
         FILE* file = fopen(p->data,"r");
         if(file == NULL)
         {
-            printf("Could not find the desired file");
+            printf("Could not find the desired file\n\n");
             return;
         }
         fseek(file,0, SEEK_END);
@@ -736,7 +737,7 @@ void backend(int on_fd)
 
         if(sendto(on_fd, buf, send_len(g), 0, (struct sockaddr*)&sender, sizeof(sender)) < 0)
         {
-            printf("Error while trying to send a SYN ACK");
+            printf("Error while trying to send a SYN ACK\n");
             return;
         }
 
@@ -798,7 +799,7 @@ void backend(int on_fd)
 
             if(sendto(on_fd, buf, send_len(g), 0, (struct sockaddr*)&sender, sizeof(sender)) < 0)
             {
-                printf("Error while trying to send a SYN ACK");
+                printf("Error while trying to send a SYN ACK\n");
                 return;
             }
 
@@ -834,7 +835,7 @@ void backend(int on_fd)
 
             if(sendto(on_fd, buf, send_len(g), 0, (struct sockaddr*)&sender, sizeof(sender)) < 0)
             {
-                printf("Error while trying to send a SYN ACK");
+                printf("Error while trying to send a SYN ACK\n");
                 return;
             }
 
@@ -858,7 +859,7 @@ void backend(int on_fd)
         //see if in sync
         if(p->ack - nf->syn != 1)
         {
-            printf("Out of sync!!");
+            printf("Out of sync!!\n\n");
             //resend last packet
         }
 
@@ -883,7 +884,7 @@ void backend(int on_fd)
 
             if(sendto(on_fd, buf, send_len(g), 0, (struct sockaddr*)&sender, sizeof(sender)) < 0)
             {
-                printf("Error while trying to send a SYN ACK");
+                printf("Error while trying to send a SYN ACK\n");
                 return;
             }
         }
