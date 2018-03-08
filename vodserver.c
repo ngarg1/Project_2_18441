@@ -26,6 +26,7 @@
 #define SERVLEN 100
 #define HOSTLEN 256
 #define PACKET_SIZE 1400
+#define HEADER 16
 
 #if 0
 /*
@@ -124,14 +125,16 @@ ftype file_types [] = {
 
 /*Our own custom UDP packet*/
 typedef struct {
-    char flags;                   //byte  0     ASFX  (Ack, Syn, Fin, Unused)
-    char pack;                    //byte  1 
+    char flags;             //byte  0     ASFX  (Ack, Syn, Fin, Unused)
+    char pack;              //byte  1 
     uint16_t source_port;   //bytes 2  - 3
     uint16_t dest_port;     //bytes 4  - 5
     uint16_t length;        //bytes 6  - 7
     uint16_t syn;           //bytes 8  - 9
     uint16_t ack;           //bytes 10 - 11
-    char* data;                   //bytes 12 - (12+length)
+    uint16_t window;        //bytes 12 - 13
+    uint16_t rtt;           //bytes 14 - 15
+    char* data;             //bytes 16 - (16+length)
 } packet;
 
 typedef struct{
@@ -203,6 +206,7 @@ void printPacket(packet* p)
     printf("flags: %u | flowID: %d | source_port: %u\n", p->flags, (int)p->pack, p->source_port);
     printf("dest_port: %u | length: %u\n", p->dest_port, p->length);
     printf("syn: %u | ack: %u\n", p->syn, p->ack);
+    printf("window: %u | rtt: %u\n", p->window, p->rtt);
     printf("data: %s\n", p->data);
     printf("-----------------------------End Packet-------------------------------------------\n");
 
@@ -283,7 +287,7 @@ void sendHeaders(char* file_size, char* filename, int clientfd){
     // Write response to fd
     
     n = write(clientfd, response, strlen(response));
-    printf("The length of the headers: %u written to clientfd: %d\n\n", strlen(response), clientfd);
+    printf("The length of the headers: %lu written to clientfd: %d\n\n", strlen(response), clientfd);
     if (n < 0)
         error("ERROR writing to socket");
     printf("~~~~Sending Headers~~~~~\n%s\n\n", response);
@@ -293,7 +297,7 @@ void sendHeaders(char* file_size, char* filename, int clientfd){
 
 int send_len(packet* p)
 {
-    return (12 + p->length) * sizeof(char);
+    return (16 + p->length) * sizeof(char);
 }
 
 
@@ -396,7 +400,7 @@ void getContent(char* path, int fd)
 
 char* package(packet* p) // storing in packet in buf
 {
-    char* buf = malloc(sizeof(char)*p->length + sizeof(char)*12); 
+    char* buf = malloc(sizeof(char)*p->length + sizeof(char)*16); 
     memcpy(buf, &(p->flags), 1);
     memcpy(buf+1, &(p->pack), 1);
     memcpy(buf+2, &(p->source_port), 2);
@@ -404,7 +408,9 @@ char* package(packet* p) // storing in packet in buf
     memcpy(buf+6, &(p->length), 2);
     memcpy(buf+8, &(p->syn), 2);
     memcpy(buf+10, &(p->ack), 2);
-    memcpy(buf+12, p->data, p->length);
+    memcpy(buf+12, &(p->window), 2);
+    memcpy(buf+14, &(p->rtt), 2);
+    memcpy(buf+16, p->data, p->length);
     return buf;
 }
 
@@ -418,8 +424,10 @@ packet* unwrap(char* buf)
     memcpy(&(p->length), buf+6, 2);
     memcpy(&(p->syn), buf+8, 2);
     memcpy(&(p->ack), buf+10, 2);
+    memcpy(&(p->window), buf+12, 2);
+    memcpy(&(p->rtt), buf+14, 2);
     p->data = malloc(sizeof(char) * p->length);
-    memcpy(p->data, buf+12, p->length);
+    memcpy(p->data, buf+16, p->length);
     return p;
 }
 
@@ -656,7 +664,7 @@ void backend(int on_fd)
     p = unwrap(buf);
 
     bzero(buf, MAXLINE);
-    printf("Received Packed of length %lu: \n", (strlen(buf+12)+12));
+    printf("Received Packed of length %lu: \n", (strlen(buf+16)+16));
     printPacket(p);
     if(p->flags == 0x04)
     {
@@ -695,7 +703,7 @@ void backend(int on_fd)
         
         //send syn ack
         memcpy(buf, package(g), send_len(g));
-        printf("Sending Packet of length %lu:\n", (12 + strlen(buf+12)));
+        printf("Sending Packet of length %lu:\n", (16 + strlen(buf+16)));
         printPacket(g);
         if(sendto(on_fd, buf, send_len(g), 0, (struct sockaddr*)&sender, sender_len) < 0)
         {
