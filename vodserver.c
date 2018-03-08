@@ -25,6 +25,7 @@
 #define MAXLINE 8192
 #define SERVLEN 100
 #define HOSTLEN 256
+#define PACKET_SIZE 1400
 
 #if 0
 /*
@@ -273,15 +274,16 @@ void sendHeaders(char* file_size, char* filename, int clientfd){
     }
     
     sprintf(response, "HTTP/1.1 200 OK\r\n"
+            "Content-Length: %s\r\n"
+            "Content-Type: %s\r\n"
             "Connection: Keep-Alive\r\n"
             "Accept-Ranges: bytes\r\n"
-            "Date: %s\r\n"
-            "Content-Type: %s\r\n"
-            "Content-Length: %s\r\n\r\n", get_rfc_time(), content_type, file_size);
+            "Date: %s\r\n\r\n", file_size, content_type, get_rfc_time());
     
     // Write response to fd
     
     n = write(clientfd, response, strlen(response));
+    printf("The length of the headers: %u written to clientfd: %d\n\n", strlen(response), clientfd);
     if (n < 0)
         error("ERROR writing to socket");
     printf("~~~~Sending Headers~~~~~\n%s\n\n", response);
@@ -417,7 +419,7 @@ packet* unwrap(char* buf)
     memcpy(&(p->syn), buf+8, 2);
     memcpy(&(p->ack), buf+10, 2);
     p->data = malloc(sizeof(char) * p->length);
-    strncpy(p->data, buf+12, p->length);
+    memcpy(p->data, buf+12, p->length);
     return p;
 }
 
@@ -678,6 +680,7 @@ void backend(int on_fd)
         }
         fseek(file,0, SEEK_END);
         size = ftell(file);
+
         sprintf(data, "%ld", size);
         printf("File is of size: %s\n", data);
         
@@ -773,21 +776,22 @@ void backend(int on_fd)
                 //resend last packet
             }
             //Find specified block of data
-            int index = p->ack - nf->base_syn - 1;
-            fseek(nf->file, 1400 * index, SEEK_SET);
+            unsigned long index = p->ack - nf->base_syn - 1;
+            fseek(nf->file, 0, SEEK_SET);
+            fseek(nf->file, PACKET_SIZE * index, SEEK_SET);
 
             //get ack skeleton
             g = get_ack(p);
 
             //fill data
-            g->data = malloc(sizeof(char)*1400);
-            int br = fread(g->data, 1, 1400, nf->file);
+            g->data = malloc((sizeof(char))*PACKET_SIZE);
+            unsigned long br = fread(g->data, (sizeof(char)), PACKET_SIZE, nf->file);
             g->length = br;
 
-            printf("\nRead and forwarded bytes from %d to %d\n\n", index*1400, (index*1400+br));
+            printf("\nRead and forwarded bytes from %lu to %lu\n\n", index*PACKET_SIZE, (index*PACKET_SIZE+br));
 
             //Check if you finished the file
-            if(br < 1400)
+            if(br < PACKET_SIZE)
             {
                 g->flags = (g->flags | 0x02);  //flags = flags | 0x0010  set FIN flag
             }
@@ -796,6 +800,7 @@ void backend(int on_fd)
             memcpy(buf, package(g), send_len(g));
             //printf("Sending Packet:\n");
             //printPacket(g);
+            printf("Sending a packet of length %d\n", send_len(g));
 
             if(sendto(on_fd, buf, send_len(g), 0, (struct sockaddr*)&sender, sizeof(sender)) < 0)
             {
@@ -820,6 +825,8 @@ void backend(int on_fd)
                 //resend last packet
             }
             //send data
+
+            printf("Writing %u bytes to http server \n", p->length);
             if(write(nf->client_fd, p->data, p->length) < 0)
             {
                 printf("Failed writing to client socket with file data\n");
