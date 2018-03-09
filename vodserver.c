@@ -156,6 +156,8 @@ typedef struct{
     socklen_t addrlen;
     uint16_t base_syn;
     uint16_t syn; //init
+    uint16_t nss;
+    uint16_t naa;
     uint16_t ack;
     char filename[MAXLINE];
     FILE* file;
@@ -469,7 +471,7 @@ packet* get_syn_ack(char flowID, uint16_t dest_port, uint16_t ack, char* data)
     return p;
 }
 
-packet* get_ack(packet* p)
+packet* get_ack(packet* p, New_flow* nf)
 {
     packet* g = (packet*)malloc(sizeof(packet));
 
@@ -478,10 +480,12 @@ packet* get_ack(packet* p)
     g->source_port = back_port;
     g->dest_port = p->source_port;
     g->length = 0;
-    g->ack = p->syn + 1;
-    g->syn = p->ack;
+    g->ack = nf->nss;
+    nf->nss += 1;
+    g->window = nf->window;
+    g->syn = nf->naa;
+    nf->naa += 1;
     g->data = NULL;
-
     return g;
 }
 
@@ -684,7 +688,6 @@ void backend(int on_fd)
             return;
         }
 
-
         //get file length
         FILE* file = fopen(p->data,"r");
         if(file == NULL)
@@ -700,6 +703,7 @@ void backend(int on_fd)
         
         //Get SYN ACK packet
         g = get_syn_ack(p->pack, p->source_port, (p->syn), data);
+        g->window = nf->window;
 
         printf("In packet File is of size: %s\n", g->data);
 
@@ -707,7 +711,10 @@ void backend(int on_fd)
         //add to Flow Table
         flow_add(p->pack, sender, g->syn, g->ack, p->data, file, size, -1, p->window);
         nf = flow_look(p->pack);
+        nf->window = p->window;
         nf->available = nf->window;
+        nf->nss = g->ack+1;
+        nf->naa = g->syn+1;
         
         //send syn ack
         memcpy(buf, package(g), send_len(g));
@@ -744,9 +751,11 @@ void backend(int on_fd)
             printf("Out of sync!! \n");
 
         }
+        nf->nss = p->syn+1;
+        nf->naa = p->ack;
 
         //Send ack
-        g = get_ack(p);
+        g = get_ack(p, nf);
         g->window = nf->window;
 
         //send ack
@@ -800,7 +809,7 @@ void backend(int on_fd)
             fseek(nf->file, PACKET_SIZE * index, SEEK_SET);
 
             //get ack skeleton
-            g = get_ack(p);
+            g = get_ack(p, nf);
 
             //fill data
             g->data = malloc((sizeof(char))*PACKET_SIZE);
@@ -852,7 +861,7 @@ void backend(int on_fd)
             }
 
             //Send ack
-            g = get_ack(p);
+            g = get_ack(p, nf);
 
             memcpy(buf, package(g), send_len(g));
 
@@ -899,7 +908,7 @@ void backend(int on_fd)
             {
                 printf("Failed writing to client socket with file data\n");
             }
-            g = get_ack(p);
+            g = get_ack(p, nf);
             g->flags = g->flags | 0x02; //Set the fin flag
 
             //Send the fin ack
