@@ -803,42 +803,49 @@ void backend(int on_fd)
                 printf("Out of sync!!");
                 //resend last packet
             }
-            //Find specified block of data
-            unsigned long index = p->ack - nf->base_syn - 1;
-            fseek(nf->file, 0, SEEK_SET);
-            fseek(nf->file, PACKET_SIZE * index, SEEK_SET);
+            nf->available++;
+            nf->syn = p->ack;
+            nf->ack = p->syn;
 
-            //get ack skeleton
-            g = get_ack(p, nf);
-
-            //fill data
-            g->data = malloc((sizeof(char))*PACKET_SIZE);
-            unsigned long br = fread(g->data, (sizeof(char)), PACKET_SIZE, nf->file);
-            g->length = br;
-
-            printf("\nRead and forwarded bytes from %lu to %lu\n\n", index*PACKET_SIZE, (index*PACKET_SIZE+br));
-
-            //Check if you finished the file
-            if(br < PACKET_SIZE)
+            while(nf->available > 0)
             {
-                g->flags = (g->flags | 0x02);  //flags = flags | 0x0010  set FIN flag
+                //Find specified block of data
+                unsigned long index = p->ack - nf->base_syn - 1;
+                fseek(nf->file, 0, SEEK_SET);
+                fseek(nf->file, PACKET_SIZE * index, SEEK_SET);
+
+                //get ack skeleton
+                g = get_ack(p, nf);
+
+                //fill data
+                g->data = malloc((sizeof(char))*PACKET_SIZE);
+                unsigned long br = fread(g->data, (sizeof(char)), PACKET_SIZE, nf->file);
+                g->length = br;
+
+                printf("\nRead and forwarded bytes from %lu to %lu\n\n", index*PACKET_SIZE, (index*PACKET_SIZE+br));
+
+                //Check if you finished the file
+                if(br < PACKET_SIZE)
+                {
+                    g->flags = (g->flags | 0x02);  //flags = flags | 0x0010  set FIN flag
+                    nf->available = -100;
+                    printf("finished!\n");
+                }
+
+                //send ack
+                memcpy(buf, package(g), send_len(g));
+                printf("Sending Packet:\n");
+                printPacket(g);
+                printf("Sending a packet of length %d\n", send_len(g));
+
+                if(sendto(on_fd, buf, send_len(g), 0, (struct sockaddr*)&sender, sizeof(sender)) < 0)
+                {
+                    printf("Error while trying to send a SYN ACK\n");
+                    return;
+                }
+                nf->available--;
             }
 
-            //send ack
-            memcpy(buf, package(g), send_len(g));
-            //printf("Sending Packet:\n");
-            //printPacket(g);
-            printf("Sending a packet of length %d\n", send_len(g));
-
-            if(sendto(on_fd, buf, send_len(g), 0, (struct sockaddr*)&sender, sizeof(sender)) < 0)
-            {
-                printf("Error while trying to send a SYN ACK\n");
-                return;
-            }
-
-            //update flow table
-            nf->syn = g->syn;
-            nf->ack = g->ack;
 
         }
         else
