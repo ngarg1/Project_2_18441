@@ -175,7 +175,7 @@ static int flow_entries = 0;
 
 static int back_port;
 static int back_fd;
-static int window_g = 2;
+static int window_g = 10;
 
 
 packet* unwrap(char* buf);
@@ -697,13 +697,13 @@ void backend(int on_fd)
         }
         fseek(file,0, SEEK_END);
         size = ftell(file);
+        fseek(file,0, SEEK_SET);
 
         sprintf(data, "%ld", size);
         printf("File is of size: %s\n", data);
         
         //Get SYN ACK packet
         g = get_syn_ack(p->pack, p->source_port, (p->syn), data);
-        g->window = nf->window;
 
         printf("In packet File is of size: %s\n", g->data);
 
@@ -712,6 +712,7 @@ void backend(int on_fd)
         flow_add(p->pack, sender, g->syn, g->ack, p->data, file, size, -1, p->window);
         nf = flow_look(p->pack);
         nf->window = p->window;
+        g->window = nf->window;
         nf->available = nf->window;
         nf->nss = g->ack+1;
         nf->naa = g->syn+1;
@@ -798,21 +799,24 @@ void backend(int on_fd)
 
             printf("\n p->ack: %u, p->syn: %u, nf->base_syn: %u\n\n", p->ack, p->syn, nf->base_syn);
 
-            if(p->ack - nf->syn != 1)
+            if(p->ack - nf->syn != 1)   //sync arithmetic
             {
                 printf("Out of sync!!");
                 //resend last packet
+                return;
             }
             nf->available++;
+
+            //update flow table with last seen
             nf->syn = p->ack;
             nf->ack = p->syn;
 
             while(nf->available > 0)
             {
                 //Find specified block of data
-                unsigned long index = p->ack - nf->base_syn - 1;
+                /*unsigned long index = p->ack - nf->base_syn - 1;
                 fseek(nf->file, 0, SEEK_SET);
-                fseek(nf->file, PACKET_SIZE * index, SEEK_SET);
+                fseek(nf->file, PACKET_SIZE * index, SEEK_SET);*/
 
                 //get ack skeleton
                 g = get_ack(p, nf);
@@ -822,13 +826,13 @@ void backend(int on_fd)
                 unsigned long br = fread(g->data, (sizeof(char)), PACKET_SIZE, nf->file);
                 g->length = br;
 
-                printf("\nRead and forwarded bytes from %lu to %lu\n\n", index*PACKET_SIZE, (index*PACKET_SIZE+br));
+                //printf("\nRead and forwarded bytes from %lu to %lu\n\n", index*PACKET_SIZE, (index*PACKET_SIZE+br));
 
                 //Check if you finished the file
                 if(br < PACKET_SIZE)
                 {
                     g->flags = (g->flags | 0x02);  //flags = flags | 0x0010  set FIN flag
-                    nf->available = -100;
+                    nf->available = -1000000;
                     printf("finished!\n");
                 }
 
@@ -881,7 +885,7 @@ void backend(int on_fd)
                 return;
             }
 
-            //update flow table
+            //update flow table with last seen
             nf->syn = g->syn;
             nf->ack = g->ack;
         }
