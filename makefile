@@ -1,5 +1,5 @@
 CC = gcc
-ARGS = -Wall -O2 -I .
+ARGS = -g -Wall -O2 -I .
 
 all: vodserver echoclient new_packet
 
