@@ -28,6 +28,7 @@
 #define PACKET_SIZE 1400
 #define HEADER 16
 
+
 #if 0
 /*
  * Structs exported from netinet/in.h (for easy reference)
@@ -160,6 +161,8 @@ typedef struct{
     FILE* file;
     long file_size;
     int client_fd;
+    uint16_t window;
+    int available;
 } New_flow;
 //static New_flow new_flow;
 
@@ -170,6 +173,7 @@ static int flow_entries = 0;
 
 static int back_port;
 static int back_fd;
+static int window_g = 2;
 
 
 packet* unwrap(char* buf);
@@ -338,7 +342,7 @@ int remove_flow(char flow_ID)
     return res;
 }
 
-New_flow flow_add(char flow_ID, struct sockaddr_in addr, uint16_t syn, uint16_t ack, char* path, FILE* file, uint16_t size, int fd)
+New_flow flow_add(char flow_ID, struct sockaddr_in addr, uint16_t syn, uint16_t ack, char* path, FILE* file, uint16_t size, int fd, uint16_t window)
 {
     New_flow nf;
     nf.pack = flow_ID;
@@ -350,6 +354,7 @@ New_flow flow_add(char flow_ID, struct sockaddr_in addr, uint16_t syn, uint16_t 
     nf.file = file;
     nf.file_size = size;
     nf.client_fd = fd;
+    nf.window = window;
 
     my_flow[flow_entries] = nf;
     flow_entries++;
@@ -387,7 +392,7 @@ void getContent(char* path, int fd)
     printPacket(req);
 
     //Add to Flow Table
-    flow_add(req->pack, *provider, req->syn, 0, path, NULL, 0, fd);
+    flow_add(req->pack, *provider, req->syn, 0, path, NULL, 0, fd, req->window);
 
     //send the first request packet out
     //Timeout ask again sitch
@@ -443,6 +448,7 @@ packet* request_new_packet(char* path, char flowID, uint16_t source_port, uint16
     p->syn = getSequence();
     p->ack = 67;    //NOT IMPORTANT
     p->data = path;
+    p->window = window_g;
     return p;
 }
 
@@ -699,7 +705,9 @@ void backend(int on_fd)
 
 
         //add to Flow Table
-        flow_add(p->pack, sender, g->syn, g->ack, p->data, file, size, -1);
+        flow_add(p->pack, sender, g->syn, g->ack, p->data, file, size, -1, p->window);
+        nf = flow_look(p->pack);
+        nf->available = nf->window;
         
         //send syn ack
         memcpy(buf, package(g), send_len(g));
@@ -718,6 +726,7 @@ void backend(int on_fd)
         printf("Received a SYN ACK\n\n");
 
         nf = flow_look(p->pack);
+        nf->available = nf->window;
 
         if(nf == NULL)
         {
@@ -738,6 +747,7 @@ void backend(int on_fd)
 
         //Send ack
         g = get_ack(p);
+        g->window = nf->window;
 
         //send ack
         memcpy(buf, package(g), send_len(g));
@@ -761,6 +771,7 @@ void backend(int on_fd)
     {
         //Normal ACK Case
         printf("Normal ACK Case\n");
+        printf("\n p->ack: %u, p->syn: %u, nf->base_syn: %u\n\n", p->ack, p->syn, nf->base_syn);
         //Look Up the Flow
         nf = flow_look(p->pack);
         if(nf == NULL)
@@ -770,7 +781,7 @@ void backend(int on_fd)
         }
 
 
-        if(nf->client_fd == -1)
+       if(nf->client_fd == -1)
         {
             //Sender of Data
             printf("Normal ACK Case -- I am the sender\n");
