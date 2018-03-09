@@ -162,6 +162,9 @@ typedef struct{
     uint16_t nss;
     uint16_t naa;
     uint16_t ack;
+    int last_ack;
+    int window_size;
+    int last_sent;
     char filename[MAXLINE];
     FILE* file;
     long file_size;
@@ -456,7 +459,7 @@ packet* request_new_packet(char* path, char flowID, uint16_t source_port, uint16
     p->source_port = source_port;
     p->dest_port = dest_port;
     p->length = strlen(path);
-    p->syn = getSequence();
+    p->syn = 0;
     p->ack = 67;    //NOT IMPORTANT
     p->data = path;
     p->window = window_g;
@@ -477,7 +480,7 @@ packet* get_syn_ack(char flowID, uint16_t dest_port, uint16_t ack, char* data)
     p->source_port = back_port;
     p->dest_port = dest_port;
     p->ack = ack + 1;
-    p->syn = getSequence();
+    p->syn = 0;
     p->length = strlen(data);
     p->data = data;
     p->rtt = t; // base_time for rtt
@@ -499,19 +502,31 @@ packet* get_ack(packet* p, New_flow* nf)
     rtt_val = g->rtt/1e3; // in seconds
 
     g->pack = p->pack;
-    g->flags = 0x08;      //0x1000 Ack, No Syn, No Fin
+    g->flags = 0x08;
     g->source_port = back_port;
     g->dest_port = p->source_port;
     g->length = 0;
-    g->ack = nf->nss;
-    nf->nss += 1;
-    g->window = nf->window;
-    g->syn = nf->naa;
-    nf->naa += 1;
+    g->syn = nf->last_ack + 1;
     g->data = NULL;
     if (rtt != 0)
         p->rtt = rtt;
     return g;
+    
+    
+//    g->pack = p->pack;
+//    g->flags = 0x08;      //0x1000 Ack, No Syn, No Fin
+//    g->source_port = back_port;
+//    g->dest_port = p->source_port;
+//    g->length = 0;
+//    g->ack = nf->nss;
+//    nf->nss += 1;
+//    g->window = nf->window;
+//    g->syn = nf->naa;
+//    nf->naa += 1;
+//    g->data = NULL;
+//    if (rtt != 0)
+//        p->rtt = rtt;
+//    return g;
 }
 
 
@@ -708,6 +723,8 @@ void backend(int on_fd)
     printPacket(p);
     if(p->flags == 0x04)
     {
+
+        printf("RECD SYN %d\n", p->syn);
         //No Ack, but Syn
 
         // printf("Got an Ack but no Syn so let's set up a new connection\n");
@@ -741,11 +758,9 @@ void backend(int on_fd)
         //add to Flow Table
         flow_add(p->pack, sender, g->syn, g->ack, p->data, file, size, -1, p->window);
         nf = flow_look(p->pack);
-        nf->window = p->window;
-        g->window = nf->window;
-        nf->available = nf->window;
-        nf->nss = g->ack+1;
-        nf->naa = g->syn+1;
+        nf->last_sent = -1;
+        nf->last_ack = -1;
+        nf->window_size = 1;
         
         //send syn ack
         memcpy(buf, package(g), send_len(g));
@@ -756,15 +771,16 @@ void backend(int on_fd)
             printf("Error while trying to send a SYN ACK");
             return;
         }
+        nf->last_sent = 0;
     }
     else if(p->flags == 0x0c)
     {
         //Receiving a SYN ACK
         //find the flow
-        printf("Received a SYN ACK\n\n");
+        printf("RECD SYN ACK%d\n", p->syn);
 
         nf = flow_look(p->pack);
-        nf->available = nf->window;
+        nf->last_ack= -1;
 
         if(nf == NULL)
         {
@@ -777,21 +793,15 @@ void backend(int on_fd)
 
 
         //Check to see that the seq number is good
-        if((p->ack - nf->syn) != 1)
+        if(p->syn != 0)
         {
-            printf("Out of sync!! \n");
+            printf("Wrong synack packet!! \n");
 
         }
-        nf->nss = p->syn+1;
-        nf->naa = p->ack;
 
         //Send ack
         g = get_ack(p, nf);
-        if (g->window > max_window_size)
-            g->window = nf->window;
-        else
-            nf->window = max_window_size;
-            // g->window = (nf->window + 2);
+        
 
         if(rate)
             max_window_size = (rate)*1000*rtt_val;
@@ -809,8 +819,7 @@ void backend(int on_fd)
 
 
         //update flow table
-        nf->syn = g->syn;
-        nf->ack = g->ack;
+        nf->last_ack = g->syn;
         nf->file_size = atoi(p->data);
 
         printf("Sending Packet:\n");
@@ -830,6 +839,7 @@ void backend(int on_fd)
         // printf("Normal ACK Case\n");
         // printf("\n p->ack: %u, p->syn: %u, nf->base_syn: %u\n\n", p->ack, p->syn, nf->base_syn);
         //Look Up the Flow
+        printf("RECD ACK%d\n", p->syn);
         nf = flow_look(p->pack);
         if(nf == NULL)
         {
@@ -845,21 +855,15 @@ void backend(int on_fd)
 
             // printf("\n p->ack: %u, p->syn: %u, nf->base_syn: %u\n\n", p->ack, p->syn, nf->base_syn);
 
-            if(p->ack - nf->syn != 1)   //sync arithmetic
-            {
-                printf("Out of sync!!");
-                re_tx_last(p,nf,on_fd);
-                //resend last packet ??? function to resend previous packet again
-                return;
-            }
-
             // expected nf->syn + 1, got is p->ack
-
-            if(p->ack == nf->syn + 1){
+            printf("LAST ACK is %d\n", nf->last_ack);
+            if(p->syn == nf->last_ack + 1){
                 // printf("In sync bawse!!!!! :)");
                 nf->error = 0; //no error
             } 
-            else if(nf->syn +1 < p-> ack){
+            else if (p->syn < nf->last_ack) {
+                return;
+            } else {
                 nf->error = 1;
                 // re-tx fucntion ?????????
             }
@@ -870,20 +874,16 @@ void backend(int on_fd)
                 return;
             }
 
-            nf->available++;
-
-            //update flow table with last seen
-            nf->syn = p->ack;
-            nf->ack = p->syn;
+            nf->last_ack = p->syn;
 
             if (g->window > max_window_size)
                 nf->window = g->window;
             else
-                nf->window = max_window_size;
-                // nf->window = (g->window + 2);
+                //nf->window = max_window_size;
+                nf->window = (g->window + 1);
 
 
-            while(nf->available > 0)
+            while(nf->last_sent - nf->last_ack < nf->window_size)
             {
                 //Find specified block of data
                 /*unsigned long index = p->ack - nf->base_syn - 1;
@@ -893,8 +893,16 @@ void backend(int on_fd)
                 //get ack skeleton
                 g = get_ack(p, nf);
 
+                g->pack = p->pack;
+                g->flags = 0x08;
+                g->source_port = back_port;
+                g->dest_port = p->source_port;
+                g->length = 0;
+                g->syn = nf->last_sent + 1;
+
                 //fill data
                 g->data = malloc((sizeof(char))*PACKET_SIZE);
+                fseek(nf->file, PACKET_SIZE * nf->last_sent, SEEK_SET);
                 unsigned long br = fread(g->data, (sizeof(char)), PACKET_SIZE, nf->file);
                 g->length = br;
 
@@ -904,7 +912,6 @@ void backend(int on_fd)
                 if(br < PACKET_SIZE)
                 {
                     g->flags = (g->flags | 0x02);  //flags = flags | 0x0010  set FIN flag
-                    nf->available = -1000000;
                     printf("finished!\n");
                 }
 
@@ -919,44 +926,38 @@ void backend(int on_fd)
                     printf("Error while trying to send \n");
                     return;
                 }
-                nf->available--;
+                nf->last_sent++;
             }
         }
-
-
         else
         {
             //Receiver of Data
             // printf("Normal ACK Case -- I am the receiver with clientfd: %d\n", nf->client_fd);
-
+            printf("RECD DATA%d\n", p->syn);
             //make sure in sync expected: nf->syn + 1
-            if(p->ack < nf->syn +1)
+            if(p->syn <= nf->last_ack)
             {
                 printf("Out of sync!!");
-                nf->error = 1;
-                // reduce window
-                //nf->window = p->window/2;?????????
                 return;
                 //resend last packet
             }
             else
                 nf->error = 0;
 
-            if (nf->error == 1){
-                re_tx_last(p,nf,on_fd);
-                return;
-            }
-
-            //send data
-
-            // printf("Writing %u bytes to http server \n", p->length);
-            if(write(nf->client_fd, p->data, p->length) < 0)
-            {
-                printf("Failed writing to client socket with file data\n");
-            }
-
             //Send ack
-            g = get_ack(p, nf); //syn and ack will be updated
+            //g = get_ack(p, nf); //syn and ack will be updated
+
+            g->pack = p->pack;
+            g->flags = 0x08;
+            g->source_port = back_port;
+            g->dest_port = p->source_port;
+            g->length = 0;
+            g->syn = nf->last_ack;
+            g->data = NULL;
+
+            if (p->syn == nf->last_ack + 1) {
+                g->syn = nf->last_ack + 1;
+            }
 
             memcpy(buf, package(g), send_len(g));
 
@@ -969,15 +970,15 @@ void backend(int on_fd)
                 return;
             }
 
-            //update flow table with last seen
-            nf->syn = g->syn;
-            nf->ack = g->ack;
-
-            if (g->window > max_window_size)
-                nf->window = g->window;
-            else
-                nf->window = max_window_size;
-                // nf->window = (g->window + 2); // successful transmission, double window
+            if (p->syn == nf->last_ack + 1) {
+                nf->last_ack ++;
+                // printf("Writing %u bytes to http server \n", p->length);
+                if(write(nf->client_fd, p->data, p->length) < 0)
+                {
+                    printf("Failed writing to client socket with file data\n");
+                }
+            }
+            
         }
 
     }
@@ -1040,84 +1041,46 @@ void re_tx_last_sender(packet* p, New_flow* nf, int on_fd){
     char buf[MAXLINE];
     struct sockaddr_in sender;
     socklen_t sender_len = sizeof(sender);
-    while(nf->available > 0)
-    {
-        //Find specified block of data
-        /*unsigned long index = p->ack - nf->base_syn - 1;
-        fseek(nf->file, 0, SEEK_SET);
-        fseek(nf->file, PACKET_SIZE * index, SEEK_SET);*/
-
-        //get ack skeleton
-        g = get_ack(p, nf);
-
-        //fill data
-        g->data = malloc((sizeof(char))*PACKET_SIZE);
-        unsigned long br = fread(g->data, (sizeof(char)), PACKET_SIZE, nf->file);
-        g->length = br;
-
-        //printf("\nRead and forwarded bytes from %lu to %lu\n\n", index*PACKET_SIZE, (index*PACKET_SIZE+br));
-
-        //Check if you finished the file
-        if(br < PACKET_SIZE)
-        {
-            g->flags = (g->flags | 0x02);  //flags = flags | 0x0010  set FIN flag
-            nf->available = -1000000;
-            // printf("finished!\n");
-        }
-
-        //send ack
-        memcpy(buf, package(g), send_len(g));
-        // printf("Sending Packet:\n");
-        printPacket(g);
-        // printf("Sending a packet of length %d\n", send_len(g));
-
-        if(sendto(on_fd, buf, send_len(g), 0, (struct sockaddr*)&sender, sizeof(sender)) < 0)
-        {
-            printf("Error while trying to send \n");
-            return;
-        }
-        nf->available--;
-    }
-}
-
-
-
-
-void re_tx_last(packet* p, New_flow* nf, int on_fd){
     
-    char buf[MAXLINE];
-    // New_flow* previous_flow;
+    //Find specified block of data
+    /*unsigned long index = p->ack - nf->base_syn - 1;
+    fseek(nf->file, 0, SEEK_SET);
+    fseek(nf->file, PACKET_SIZE * index, SEEK_SET);*/
 
-    ////// ????? check if syn-ack pair is correct
+    //get ack skeleton
+    g = get_ack(p, nf);
 
-    // previous_flow->syn = p->syn + 1; //subtract 1 from last seen syn as re-tx the previous packet
-    // previous_flow->ack = p->ack + 1;
-    packet* g = malloc(sizeof(packet));
-    struct sockaddr_in sender;
-    socklen_t sender_len = sizeof(sender);
+    //fill data
+    g->data = malloc((sizeof(char))*PACKET_SIZE);
+    fseek(nf->file, PACKET_SIZE * (nf->last_ack), SEEK_SET);
+    unsigned long br = fread(g->data, (sizeof(char)), PACKET_SIZE, nf->file);
+    g->length = br;
 
-    g->pack = p->pack;
-    g->flags = 0x08;      //0x1000 Ack, No Syn, No Fin
-    g->source_port = back_port;
-    g->dest_port = p->source_port;
-    g->length = 0;
-    g->ack = nf->nss-1;
-    g->window = (nf->window)/2;
-    g->syn = nf->naa-1;
-    g->data = NULL;
+    //printf("\nRead and forwarded bytes from %lu to %lu\n\n", index*PACKET_SIZE, (index*PACKET_SIZE+br));
 
+    //Check if you finished the file
+    if(br < PACKET_SIZE)
+    {
+        g->flags = (g->flags | 0x02);  //flags = flags | 0x0010  set FIN flag
+        // printf("finished!\n");
+    }
+
+    //send ack
     memcpy(buf, package(g), send_len(g));
-
-    // printf("Re-tx last packet (check ack and syn):\n");
+    // printf("Sending Packet:\n");
     printPacket(g);
+    // printf("Sending a packet of length %d\n", send_len(g));
 
     if(sendto(on_fd, buf, send_len(g), 0, (struct sockaddr*)&sender, sizeof(sender)) < 0)
     {
-        printf("Error while trying to sendd\n");
+        printf("Error while trying to send \n");
         return;
     }
-
 }
+
+
+
+
 
 
 int main(int argc, char **argv) {
