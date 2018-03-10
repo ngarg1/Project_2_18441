@@ -274,7 +274,7 @@ void addPeer(char *file, struct sockaddr_in serveraddr, unsigned short int s_por
     np->port = s_port;
     my_db[db_entries] = *np;
     db_entries++;
-    printf("added!\n");
+    // printf("added!\n");
     return;
 }
 
@@ -318,7 +318,7 @@ void sendHeaders(char* file_size, char* filename, int clientfd){
     printf("The length of the headers: %lu written to clientfd: %d\n\n", strlen(response), clientfd);
     if (n < 0)
         error("ERROR writing to socket");
-    printf("~~~~Sending Headers~~~~~\n%s\n\n", response);
+    // printf("~~~~Sending Headers~~~~~\n%s\n\n", response);
 
     return;
     
@@ -523,21 +523,6 @@ packet* get_ack(packet* p, New_flow* nf)
         p->rtt = rtt;
     return g;
     
-    
-//    g->pack = p->pack;
-//    g->flags = 0x08;      //0x1000 Ack, No Syn, No Fin
-//    g->source_port = back_port;
-//    g->dest_port = p->source_port;
-//    g->length = 0;
-//    g->ack = nf->nss;
-//    nf->nss += 1;
-//    g->window = nf->window;
-//    g->syn = nf->naa;
-//    nf->naa += 1;
-//    g->data = NULL;
-//    if (rtt != 0)
-//        p->rtt = rtt;
-//    return g;
 }
 
 
@@ -570,15 +555,6 @@ static int bps = 0;
  * client. It returns a structure url_info, which contains different parts of
  * request. It returns a PARSE_ERROR if the request was malformed. For example:
  * input : char *buf - pointer to request string.
- *                  "GET http://www.example.com:8080/home.html HTTP/1.0"
- "http://localhost:8000/small.ogv"
- "http://localhost:8000/Users/Sanika/Desktop/cat.jpg"
- GET /peer/add/?path=video.ogg &host=10.0.0.2&port=81
- 
- http://localhost:8345/peer/add?path=/Users/Sanika/Desktop/Documents/Project_2_18441/content/hi.jpg&host=pi.ece.cmu.edu&port=8346
- 
- "GET /small.ogv HTTP/1.1\r\n\r\n"
- "GET /Users/Sanika/Desktop/cat.jpg HTTP/1.1"
  * output : url_info parse_url- a structure containing different parsed values.
  *                  .method - "GET"
  *                  .url - "www.example.com:8080/home.html"
@@ -608,13 +584,13 @@ url_info parse(char *buf){
     /* version must be either HTTP/1.0 or HTTP/1.1 */
     if (sscanf(buf, "%s %s HTTP/1.%c", method, path, &version) != 3
         || (version != '0' && version != '1')) {
-        printf("\n\nBUF: %s\n", buf);
+        // printf("\n\nBUF: %s\n", buf);
         printf("500 Internal Server Error: Received a malformed request due to method/path/version\n");
         parse_url.result = PARSE_ERROR;
         return parse_url;
     }
     snprintf(parse_url.method , sizeof(method), "%s", method);
-    printf("\n\n\nPATH with everything: %s\n", path);
+    // printf("\n\n\nPATH with everything: %s\n", path);
     if(sscanf(path, "%*c%[^/]%*c%[^?]%s", peer, pm, params) < 2 || strcmp(peer, "peer") !=0)
     {
         printf("\n\nNOT A VALID URI FOR PROJECT 2\n\n");
@@ -623,7 +599,7 @@ url_info parse(char *buf){
     }
     else
     {
-        printf("\nPEER: %s\n METHOD: %s\n PARAMS: %s\n", peer, pm, params);
+        // printf("\nPEER: %s\n METHOD: %s\n PARAMS: %s\n", peer, pm, params);
         if(pm[0] == 'v')
         {
             //No parameters means this is a view or status request
@@ -634,7 +610,7 @@ url_info parse(char *buf){
                 //VIEW REQUEST
                 parse_url.pm = VIEW;
                 snprintf(parse_url.path , sizeof(path), "%s", path);
-                printf("PATH: %s\n\n", parse_url.path);
+                // printf("PATH: %s\n\n", parse_url.path);
                 if (sscanf(path, "%[^.]%s", temp, ext) != 2)
                 {
                     printf("500 Internal Server Error:Received a malformed request due to extension \n");
@@ -735,9 +711,9 @@ void backend(int on_fd)
     printPacket(p);
     if(p->flags == 0x04)
     {
-        printf("Came here\n");
+        // printf("Came here\n");
         
-        printf("RECD SYN %d\n", p->syn);
+        // printf("RECD SYN %d\n", p->syn);
         //No Ack, but Syn
 
         // printf("Got an Ack but no Syn so let's set up a new connection\n");
@@ -760,7 +736,7 @@ void backend(int on_fd)
         fseek(file,0, SEEK_SET);
 
         sprintf(data, "%ld", size);
-        printf("File is of size: %s\n", data);
+        // printf("File is of size: %s\n", data);
         
         //Get SYN ACK packet
         g = get_syn_ack(p->pack, p->source_port, (p->syn), data);
@@ -794,7 +770,7 @@ void backend(int on_fd)
     {
         //Receiving a SYN ACK
         //find the flow
-        printf("RECD SYN ACK%d\n", p->syn);
+        // printf("RECD SYN ACK%d\n", p->syn);
 
         nf = flow_look(p->pack);
         nf->last_ack= -1;
@@ -836,7 +812,7 @@ void backend(int on_fd)
         nf->last_ack = g->syn;
         nf->file_size = atoi(p->data);
 
-        printf("Sending Packet:\n");
+        // printf("Sending Packet:\n");
         printPacket(g);
 
 
@@ -859,9 +835,9 @@ void backend(int on_fd)
             max_window_size = 1000;
 
 
-        printf("RECD ACK%d\n", p->syn);
+        // printf("RECD ACK%d\n", p->syn);
         nf = flow_look(p->pack);
-        printf("Blah\n");
+        // printf("Blah\n");
         
         if(nf == NULL)
         {
@@ -870,8 +846,8 @@ void backend(int on_fd)
         }
         
         nf->last_ack_time = getTimeMilliseconds(); //update time
-        printf("Last ack updating to %d\n", nf->last_ack_time);
-        printf("Blah2\n");
+        // printf("Last ack updating to %d\n", nf->last_ack_time);
+        // printf("Blah2\n");
 
        if(nf->client_fd == -1)
         {
@@ -882,7 +858,7 @@ void backend(int on_fd)
             // printf("\n p->ack: %u, p->syn: %u, nf->base_syn: %u\n\n", p->ack, p->syn, nf->base_syn);
 
             // expected nf->syn + 1, got is p->ack
-            printf("LAST ACK is %d\n", nf->last_ack);
+            // printf("LAST ACK is %d\n", nf->last_ack);
             if(p->syn == nf->last_ack + 1){
                 // printf("In sync bawse!!!!! :)");
                 nf->error = 0; //no error
@@ -901,16 +877,16 @@ void backend(int on_fd)
             }
 
             nf->last_ack = p->syn;
-            printf("Window size is %d, max is %d\n", nf->window_size, max_window_size);
+            // printf("Window size is %d, max is %d\n", nf->window_size, max_window_size);
             if (nf->window_size > max_window_size)
                 nf->window_size = max_window_size;
             else
                 nf->window_size ++;
 
-            printf("Window increased to %d\n", nf->window_size);
+            // printf("Window increased to %d\n", nf->window_size);
 
 
-            printf("Sending %d new packets\n", nf->window_size - (nf->last_sent - nf->last_ack));
+            // printf("Sending %d new packets\n", nf->window_size - (nf->last_sent - nf->last_ack));
             while(nf->last_sent - nf->last_ack < nf->window_size)
             {
                 //Find specified block of data
@@ -940,7 +916,7 @@ void backend(int on_fd)
                 if(br < PACKET_SIZE)
                 {
                     g->flags = (g->flags | 0x02);  //flags = flags | 0x0010  set FIN flag
-                    printf(" %d lst sent , finished!\n", nf->last_sent);
+                    // printf(" %d lst sent , finished!\n", nf->last_sent);
                 }
 
                 //send ack
@@ -951,7 +927,7 @@ void backend(int on_fd)
 
                 if(sendto(on_fd, buf, send_len(g), 0, (struct sockaddr*)&sender, sizeof(sender)) < 0)
                 {
-                    printf("Error while trying to send1 \n");
+                    // printf("Error while trying to send1 \n");
                     return;
                 }
                 free(g->data);
@@ -962,7 +938,7 @@ void backend(int on_fd)
         {
             //Receiver of Data
             // printf("Normal ACK Case -- I am the receiver with clientfd: %d\n", nf->client_fd);
-            printf("RECD DATA%d\n", p->syn);
+            // printf("RECD DATA%d\n", p->syn);
             //make sure in sync expected: nf->syn + 1
             if(p->syn <= nf->last_ack)
             {
@@ -996,7 +972,7 @@ void backend(int on_fd)
 
             if (p->syn == nf->last_ack + 1) {
                 
-                printf("Writing %u bytes to http server FD %d\n", p->length, nf->client_fd);
+                // printf("Writing %u bytes to http server FD %d\n", p->length, nf->client_fd);
                 
                 if(write(nf->client_fd, p->data, p->length) < 0)
                 {
@@ -1005,7 +981,7 @@ void backend(int on_fd)
                     nf->last_ack ++;
                     if(sendto(on_fd, buf, send_len(g), 0, (struct sockaddr*)&sender, sizeof(sender)) < 0)
                     {
-                        printf("Error while trying to sendd\n");
+                        // printf("Error while trying to sendd\n");
                         return;
                     }
                 }
@@ -1017,19 +993,19 @@ void backend(int on_fd)
     else if(p->flags == 0x0a)
     {
         //FIN ACK
-        printf("Received a FIN ACK\n");
+        // printf("Received a FIN ACK\n");
         //look up flow
         nf = flow_look(p->pack);
         if(nf == NULL)
         {
-            printf("Could not find the flow that the ACK responds to\n");
+            // printf("Could not find the flow that the ACK responds to\n");
             return;
         }
 
         //see if in sync
         if(p->ack - nf->syn != 1)
         {
-            printf("Out of sync!!\n\n");
+            // printf("Out of sync!!\n\n");
             nf->window = p->window/2;
             if (nf->window_size == 0) {
                 nf->window_size =  1;
@@ -1059,7 +1035,7 @@ void backend(int on_fd)
 
             if(sendto(on_fd, buf, send_len(g), 0, (struct sockaddr*)&sender, sizeof(sender)) < 0)
             {
-                printf("Error while trying to send a SYN ACK\n");
+                // printf("Error while trying to send a SYN ACK\n");
                 return;
             }
         }
@@ -1108,7 +1084,7 @@ void re_tx_last_sender(packet* p, New_flow* nf, int on_fd){
 
     if(sendto(on_fd, buf, send_len(g), 0, (struct sockaddr*)&nf->addr, sizeof(sender)) < 0)
     {
-        printf("Error while trying to send 2\n");
+        // printf("Error while trying to send 2\n");
         return;
     }
 }
@@ -1194,10 +1170,10 @@ int main(int argc, char **argv) {
     FD_SET(back_fd, &live_set);//add live_set to listening and backend fd??
     
     /* main loop */
-    int akskd = 0;
+    // int akskd = 0;
     uint64_t last_timeout_check = getTimeMilliseconds();
     while (1) {
-        printf("%d\n", akskd++);
+        // printf("%d\n", akskd++);
         //printf("hiiii!~ER@#$T~~~~~~~~~~~~\n");
         curr_set = live_set;
         // curr_set always overwritten from the beginning???\
@@ -1206,15 +1182,15 @@ int main(int argc, char **argv) {
 
         result = select(FD_SETSIZE, &curr_set, NULL, NULL, &tv);
 
-        printf("Selected \n");
+        // printf("Selected \n");
 
-        printf("FD list ");
+        // printf("FD list ");
         for (on_fd = 0; on_fd < FD_SETSIZE; ++on_fd) {
             if (FD_ISSET(on_fd, &curr_set)) {
                 printf("%d ", on_fd);
             }
         }
-        printf("\n");
+        // printf("\n");
         for(on_fd = 0; on_fd < FD_SETSIZE; ++on_fd)
         {
             if (FD_ISSET(on_fd, &curr_set))
@@ -1223,8 +1199,8 @@ int main(int argc, char **argv) {
                 if(on_fd == listenfd)
                 {
 
-                    printf("new TCP conn\n");
-                    printf("ON_FD is %d \n", on_fd);
+                    // printf("new TCP conn\n");
+                    // printf("ON_FD is %d \n", on_fd);
                     //Listening Port Got a Request
                     
                     
@@ -1249,25 +1225,25 @@ int main(int argc, char **argv) {
                     //printf("backend\n");
                     //BACKEND PORT WANTS SOME SERVICE
                     //recvfrom/
-                    printf("Starting backend routine\n");
+                    // printf("Starting backend routine\n");
                     backend(on_fd);
-                    printf("Ending backend routine\n");
+                    // printf("Ending backend routine\n");
                 }
                 else
                 {
-                    printf("ON_FD is %d \n", on_fd);
-                    printf("serve this biatch\n");
+                    // printf("ON_FD is %d \n", on_fd);
+                    // printf("serve this biatch\n");
                     //SERVICE -- Get Request -- Could be ADD, VIEW, CONFIG, OR OTHER
-                    printf("  Descriptor %d is readable\n", on_fd);
+                    // printf("  Descriptor %d is readable\n", on_fd);
                     serve(on_fd, &live_set);
-                    printf("Ending server routine\n");
+                    // printf("Ending server routine\n");
                 }
             }
         }
 
         if (getTimeMilliseconds() - last_timeout_check > 100) {
             uint64_t current = getTimeMilliseconds();
-            printf("Flow entries is %d\n", flow_entries);
+            // printf("Flow entries is %d\n", flow_entries);
             for(int i = 0; i < flow_entries; i++)
             {
                 
@@ -1275,7 +1251,7 @@ int main(int argc, char **argv) {
                 if (nf->client_fd != -1) {
                     break;
                 }
-                printf("Trying flow %d\n", i);
+                // printf("Trying flow %d\n", i);
                 char data[MAXLINE];
                 char buf[MAXLINE];
                 struct sockaddr_in sender;
@@ -1286,7 +1262,7 @@ int main(int argc, char **argv) {
                 bzero(&sender, sender_len);
 
                 if (current - nf->last_ack_time > 500) {
-                    printf("TImeout: diff is %d\n", current - nf->last_ack_time);
+                    // printf("TImeout: diff is %d\n", current - nf->last_ack_time);
                     nf->last_ack_time = current;
                     nf->window_size = nf->window_size / 2;
                     if (nf->window_size == 0) {
@@ -1376,8 +1352,8 @@ void* serve(int connfd, fd_set* live_set)
         return NULL;
     }
     // 
-    printf("%s parsed in to method: %s\npath: %s\n host: %s\n backend_port: %u\n rate: %u\nextension: %s\n",
-           buf, sample->method, sample->path, sample->host, sample->back_port, sample->rate, sample->ext);   
+    // printf("%s parsed in to method: %s\npath: %s\n host: %s\n backend_port: %u\n rate: %u\nextension: %s\n",
+           // buf, sample->method, sample->path, sample->host, sample->back_port, sample->rate, sample->ext);   
     
 
     if (sample->rate != 0)
@@ -1416,7 +1392,7 @@ void* serve(int connfd, fd_set* live_set)
     {
         return NULL;
     }
-    printf("peer method: %d\n", sample->pm);
+    // printf("peer method: %d\n", sample->pm);
     
     switch(sample->pm)
     {
