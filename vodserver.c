@@ -856,7 +856,7 @@ void backend(int on_fd)
         if(rate)
             max_window_size = (rate)*1000*rtt_val;
         else
-            max_window_size = 30;
+            max_window_size = 1000;
 
 
         printf("RECD ACK%d\n", p->syn);
@@ -940,7 +940,7 @@ void backend(int on_fd)
                 if(br < PACKET_SIZE)
                 {
                     g->flags = (g->flags | 0x02);  //flags = flags | 0x0010  set FIN flag
-                    printf("finished!\n");
+                    printf(" %d lst sent , finished!\n", nf->last_sent);
                 }
 
                 //send ack
@@ -993,19 +993,21 @@ void backend(int on_fd)
             // printf("Sending Packet:\n");
             printPacket(g);
 
-            if(sendto(on_fd, buf, send_len(g), 0, (struct sockaddr*)&sender, sizeof(sender)) < 0)
-            {
-                printf("Error while trying to sendd\n");
-                return;
-            }
 
             if (p->syn == nf->last_ack + 1) {
-                nf->last_ack ++;
+                
                 printf("Writing %u bytes to http server FD %d\n", p->length, nf->client_fd);
                 
                 if(write(nf->client_fd, p->data, p->length) < 0)
                 {
                     printf("Failed writing to client socket with file data\n");
+                } else {
+                    nf->last_ack ++;
+                    if(sendto(on_fd, buf, send_len(g), 0, (struct sockaddr*)&sender, sizeof(sender)) < 0)
+                    {
+                        printf("Error while trying to sendd\n");
+                        return;
+                    }
                 }
             }
             
@@ -1015,7 +1017,7 @@ void backend(int on_fd)
     else if(p->flags == 0x0a)
     {
         //FIN ACK
-        // printf("Received a FIN ACK\n");
+        printf("Received a FIN ACK\n");
         //look up flow
         nf = flow_look(p->pack);
         if(nf == NULL)
